@@ -4,6 +4,17 @@
 #include <cstdint>
 #include <algorithm>
 
+struct MortonPrimitive
+{
+    uint32_t primitiveIndex;
+    uint64_t mortonCode;
+
+    bool operator==(const MortonPrimitive &other) const
+    {
+        return primitiveIndex == other.primitiveIndex && mortonCode == other.mortonCode;
+    }
+};
+
 inline uint64_t expandBits(uint32_t v)
 {
     v = (v * 0x00010001u) & 0xFF0000FFu;

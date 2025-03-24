@@ -1,7 +1,11 @@
 #include <gtest/gtest.h>
 #include "ParallelRadixSort.h"
+#include <algorithm>
+#include <random>
+#include <chrono>
 
-TEST(ChunkedRadixSortTest, BasicSorting) {
+TEST(ChunkedRadixSortTest, BasicSorting)
+{
     std::vector<MortonPrimitive> primitives = {
             {0, 6},
             {1, 1},
@@ -17,7 +21,8 @@ TEST(ChunkedRadixSortTest, BasicSorting) {
     EXPECT_EQ(primitives[3].mortonCode, 6);
 }
 
-TEST(ChunkedRadixSortTest, AlreadySorted) {
+TEST(ChunkedRadixSortTest, AlreadySorted)
+{
     std::vector<MortonPrimitive> primitives = {
             {0, 0},
             {1, 1},
@@ -33,7 +38,8 @@ TEST(ChunkedRadixSortTest, AlreadySorted) {
     EXPECT_EQ(primitives[3].mortonCode, 3);
 }
 
-TEST(ChunkedRadixSortTest, EmptyVector) {
+TEST(ChunkedRadixSortTest, EmptyVector)
+{
     std::vector<MortonPrimitive> primitives;
 
     ChunkedRadixSort(primitives);
@@ -41,15 +47,17 @@ TEST(ChunkedRadixSortTest, EmptyVector) {
     EXPECT_TRUE(primitives.empty());
 }
 
-TEST(ChunkedRadixSortTest, SingleElement) {
-    std::vector<MortonPrimitive> primitives = { {0, 7} };
+TEST(ChunkedRadixSortTest, SingleElement)
+{
+    std::vector<MortonPrimitive> primitives = {{0, 7}};
 
     ChunkedRadixSort(primitives);
 
     EXPECT_EQ(primitives[0].mortonCode, 7);
 }
 
-TEST(ChunkedRadixSortTest, DuplicatedMortonCodes) {
+TEST(ChunkedRadixSortTest, DuplicatedMortonCodes)
+{
     std::vector<MortonPrimitive> primitives = {
             {0, 2},
             {1, 1},
@@ -63,4 +71,46 @@ TEST(ChunkedRadixSortTest, DuplicatedMortonCodes) {
     EXPECT_EQ(primitives[1].mortonCode, 2);
     EXPECT_EQ(primitives[2].mortonCode, 2);
     EXPECT_EQ(primitives[3].mortonCode, 3);
+}
+
+std::vector<MortonPrimitive> generateRandomMortonPrimitives(size_t count)
+{
+    std::vector<MortonPrimitive> primitives;
+    std::mt19937 rng(std::random_device{}());
+    std::uniform_int_distribution<uint64_t> dist(0, 0xFFFFFFFFFFFFFFFFULL);
+    for (size_t i = 0; i < count; ++i)
+    {
+        primitives.push_back({static_cast<uint32_t>(i), dist(rng)});
+    }
+    return primitives;
+}
+
+TEST(ChunkedRadixSortTest, RandomDataSorting)
+{
+    auto primitives = generateRandomMortonPrimitives(1000000);
+
+    auto expected = primitives;
+
+    auto start = std::chrono::high_resolution_clock::now();
+    std::sort(expected.begin(), expected.end(),
+              [](const MortonPrimitive &a, const MortonPrimitive &b) {
+                  return a.mortonCode < b.mortonCode;
+              });
+    auto end = std::chrono::high_resolution_clock::now();
+    auto stdSortDuration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    start = std::chrono::high_resolution_clock::now();
+    ChunkedRadixSort(primitives);
+    end = std::chrono::high_resolution_clock::now();
+    auto radixDuration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    std::cout << "Radix Sort Duration: " << radixDuration << " ms" << std::endl;
+    std::cout << "std::sort Duration: " << stdSortDuration << " ms" << std::endl;
+
+    ASSERT_EQ(primitives.size(), expected.size());
+    for (size_t i = 0; i < primitives.size(); ++i)
+    {
+        EXPECT_EQ(primitives[i].mortonCode, expected[i].mortonCode)
+                            << "Mismatch at index " << i;
+    }
 }

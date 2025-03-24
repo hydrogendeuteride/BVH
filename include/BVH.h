@@ -3,6 +3,7 @@
 
 #include "BoundingBox.h"
 #include "MortonCode.h"
+#include "ParallelRadixSort.h"
 #include <vector>
 #include <algorithm>
 #include <atomic>
@@ -20,12 +21,6 @@ struct BVHNode
     uint32_t right_idx;
     uint32_t parent_idx;
     bool isLeaf;
-};
-
-struct MortonPrimitive
-{
-    uint32_t primitiveIndex;
-    uint64_t mortonCode;
 };
 
 inline uint32_t
@@ -175,10 +170,12 @@ std::vector<MortonPrimitive> generateMortonCodes(const std::vector<Primitive> &p
         mortonPrimitives[i].mortonCode = computeMortonCode(centroid, sceneMin, sceneExtent);
     }
 
-    std::sort(mortonPrimitives.begin(), mortonPrimitives.end(),
-              [](const MortonPrimitive &a, const MortonPrimitive &b) {
-                  return a.mortonCode < b.mortonCode;
-              });
+//    std::sort(mortonPrimitives.begin(), mortonPrimitives.end(),
+//              [](const MortonPrimitive &a, const MortonPrimitive &b) {
+//                  return a.mortonCode < b.mortonCode;
+//              });
+
+    ChunkedRadixSort(mortonPrimitives);
 
     return mortonPrimitives;
 }
