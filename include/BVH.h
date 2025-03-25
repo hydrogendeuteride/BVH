@@ -184,6 +184,17 @@ std::vector<BVHNode>
 buildBVH(const std::vector<Primitive> &primitives, const std::vector<MortonPrimitive> &mortonPrimitives)
 {
     uint32_t numPrimitives = static_cast<uint32_t>(primitives.size());
+
+    if (numPrimitives == 1)
+    {
+        std::vector<BVHNode> nodes(1);
+        nodes[0].isLeaf = true;
+        nodes[0].object_idx = mortonPrimitives[0].primitiveIndex;
+        nodes[0].bounds = primitives[mortonPrimitives[0].primitiveIndex].bounds;
+        nodes[0].parent_idx = 0;
+        return nodes;
+    }
+
     uint32_t numInternalNodes = numPrimitives - 1;
     uint32_t totalNodes = numPrimitives + numInternalNodes;
 
