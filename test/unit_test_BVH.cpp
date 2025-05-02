@@ -249,7 +249,7 @@ TEST_F(BVHTest, RandomPrimitives)
 
 TEST_F(BVHTest, PerformanceTest)
 {
-    for (int count: {1000, 10000})
+    for (int count: {1000, 1000000})
     {
         auto primitives = generateRandomPrimitives(count);
 
