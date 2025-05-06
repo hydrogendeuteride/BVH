@@ -1,110 +1,235 @@
 #ifndef BVH2_CSARRAY_H
 #define BVH2_CSARRAY_H
 
+#include <algorithm>
 #include <cstdint>
+#include <numeric>
+#include <tuple>
 #include <vector>
 #include <limits>
 
-struct OctreeNode
+namespace cstone
 {
-    uint64_t startCode;
-    uint64_t endCode;
-};
 
-class CornerstoneOctree
-{
-public:
-    using keyType = std::uint64_t;
-    using countType = unsigned;
-    using indexType = int;
+    using TreeNodeIndex = int;
+    using LocalIndex = unsigned;
 
-    explicit CornerstoneOctree(unsigned maxParticlePerNode)
-            : bucketSize_(maxParticlePerNode)
+    template<class Vector>
+    std::size_t nNodes(const Vector &tree)
     {
-        codes_ = {0, keyType{1} << 60};
-        counts_ = {0};
+        assert(tree.size());
+        return tree.size() - 1;
     }
 
-    void build(const keyType *codesStart, const keyType *codesEnd)
-    {
-        counts_[0] = static_cast<countType>(codesEnd - codesStart);
-
-        while (!updateOctree(codesStart, codesEnd,
-                             std::numeric_limits<countType>::max()));
-    }
-
-    const std::vector<keyType> &codes() const
-    { return codes_; }
-
-    const std::vector<countType> &counts() const
-    { return counts_; }
-
-    std::size_t nNodes() const noexcept
-    { return codes_.size() - 1; }
-
-private:
-    static inline unsigned treeLevel(keyType range)
+    template<class KeyType>
+    unsigned treeLevel(KeyType range)
     {
         return static_cast<unsigned>(__builtin_ctzll(range) / 3);
     }
 
-    static inline keyType nodeRange(unsigned level)
+    template<class KeyType>
+    KeyType nodeRange(unsigned level)
     {
-        return keyType{1} << (3 * level);
+        return KeyType{1} << (3 * level);
     }
 
-    static inline int octalDigit(keyType code, unsigned level)
+    template<class KeyType>
+    int octalDigit(KeyType code, unsigned level)
     {
         return static_cast<int>((code >> (3 * level)) & 0x7ull);
     }
 
-    static countType calculateNodeCount(keyType nodeStart,
-                                        keyType nodeEnd,
-                                        const keyType *codesStart,
-                                        const keyType *codesEnd,
-                                        countType maxCount)
+    template<class KeyType>
+    constexpr unsigned maxTreeLevel()
     {
-        auto *lo = std::lower_bound(codesStart, codesEnd, nodeStart);
-        auto *hi = std::lower_bound(codesStart, codesEnd, nodeEnd);
-        auto cnt = static_cast<countType>(hi - lo);
-        return std::min(cnt, maxCount);
+        return sizeof(KeyType) * 8 / 3;
     }
 
-    void computeNodeCounts(const keyType *codesStart,
-                           const keyType *codesEnd,
-                           countType maxCount)
+    template<class KeyType>
+    unsigned calculateNodeCount(
+            KeyType nodeStart, KeyType nodeEnd, const KeyType *codesStart, const KeyType *codesEnd, size_t maxCount)
     {
-        const indexType N = static_cast<indexType>(nNodes());
-        counts_.resize(N);
+        auto rangeStart = std::lower_bound(codesStart, codesEnd, nodeStart);
+        auto rangeEnd = std::lower_bound(codesStart, codesEnd, nodeEnd);
+        size_t count = rangeEnd - rangeStart;
 
+        return std::min(count, maxCount);
+    }
+
+    template<class KeyType>
+    void computeNodeCounts(const KeyType *tree,
+                           unsigned *counts,
+                           TreeNodeIndex numNodes,
+                           const KeyType *codesStart,
+                           const KeyType *codesEnd,
+                           unsigned maxCount)
+    {
 #pragma omp parallel for schedule(static)
-        for (indexType i = 0; i < N; ++i)
+        for (TreeNodeIndex i = 0; i < numNodes; ++i)
         {
-            counts_[i] = calculateNodeCount(codes_[i], codes_[i + 1],
-                                            codesStart, codesEnd, maxCount);
+            counts[i] = calculateNodeCount(tree[i], tree[i + 1], codesStart, codesEnd, maxCount);
         }
     }
 
-    bool rebalanceDecision(std::vector<indexType> &nodeOps)
+    template<class KeyType>
+    inline std::tuple<int, unsigned> siblingAndLevel(const KeyType *csTree, TreeNodeIndex nodeIdx)
+    {
+        KeyType thisNode = csTree[nodeIdx];
+        KeyType range = csTree[nodeIdx + 1] - thisNode;
+        unsigned level = treeLevel<KeyType>(range);
+
+        if (level == 0)
+        { return {-1, level}; }
+
+        int siblingIdx = octalDigit<KeyType>(thisNode, level);
+        bool siblings = (csTree[nodeIdx - siblingIdx + 8] ==
+                         csTree[nodeIdx - siblingIdx] + nodeRange<KeyType>(level - 1));
+        if (!siblings)
+        { siblingIdx = -1; }
+
+        return {siblingIdx, level};
+    }
+
+    template<class KeyType>
+    int calculateNodeOp(const KeyType *tree, TreeNodeIndex nodeIdx, const unsigned *counts, unsigned bucketSize)
+    {
+        auto [siblingIdx, level] = siblingAndLevel(tree, nodeIdx);
+
+        if (siblingIdx > 0)
+        {
+            auto g = counts + nodeIdx - siblingIdx;
+            size_t parentCount =
+                    size_t(g[0]) + size_t(g[1]) + size_t(g[2]) + size_t(g[3]) + size_t(g[4]) + size_t(g[5]) +
+                    size_t(g[6]) + size_t(g[7]);
+            bool countMerge = parentCount <= size_t(bucketSize);
+            if (countMerge)
+            { return 0; }
+        }
+
+        if (counts[nodeIdx] > bucketSize && level < maxTreeLevel<KeyType>())
+        { return 8; }
+
+        return 1;
+    }
+
+    template<class KeyType, class LocalIndex>
+    bool rebalanceDecision(
+            const KeyType *tree, const unsigned *counts, TreeNodeIndex nNodes, unsigned bucketSize, LocalIndex *nodeOps)
     {
         bool converged = true;
-        const indexType N = static_cast<indexType> (nNodes());
 
 #pragma omp parallel
         {
-            bool threadConv = true;
-#pragma omp for schedule(static)
+            bool convergedThread = true;
+#pragma omp for
+            for (TreeNodeIndex i = 0; i < nNodes; ++i)
+            {
+                int decision = calculateNodeOp(tree, i, counts, bucketSize);
+                if (decision != 1)
+                { convergedThread = false; }
 
-
+                nodeOps[i] = decision;
+            }
+            if (!convergedThread)
+            { converged = false; }
         }
+        return converged;
+    }
+
+    template<class KeyType>
+    void processNode(TreeNodeIndex nodeIndex, const KeyType *oldTree, const TreeNodeIndex *nodeOps, KeyType *newTree)
+    {
+        KeyType thisNode = oldTree[nodeIndex];
+        KeyType range = oldTree[nodeIndex + 1] - thisNode;
+        unsigned level = treeLevel<KeyType>(range);
+
+        TreeNodeIndex opCode = nodeOps[nodeIndex + 1] - nodeOps[nodeIndex];
+        TreeNodeIndex newNodeIndex = nodeOps[nodeIndex];
+
+        if (opCode == 1)
+        { newTree[newNodeIndex] = thisNode; }
+        else if (opCode == 8)
+        {
+            for (int sibling = 0; sibling < 8; ++sibling)
+            {
+                newTree[newNodeIndex + sibling] = thisNode + sibling * nodeRange<KeyType>(level + 1);
+            }
+        }
+    }
+
+    template<class InputVector, class OutputVector>
+    void rebalanceTree(const InputVector &tree, OutputVector &newTree, TreeNodeIndex *nodeOps)
+    {
+        TreeNodeIndex numNodes = nNodes(tree);
+
+        std::exclusive_scan(nodeOps, nodeOps + numNodes + 1, nodeOps, 0);
+        TreeNodeIndex newNumNodes = nodeOps[numNodes];
+
+        newTree.resize(newNumNodes + 1);
+
+#pragma omp parallel for schedule(static)
+        for (TreeNodeIndex i = 0; i < numNodes; ++i)
+        {
+            processNode(i, tree.data(), nodeOps, newTree.data());
+        }
+        newTree.back() = tree.back();
+    }
+
+    template<class KeyType>
+    bool updateOctree(const KeyType *firstKey,
+                      const KeyType *lastKey,
+                      unsigned bucketSize,
+                      std::vector<KeyType> &tree,
+                      std::vector<unsigned> &counts,
+                      unsigned maxCount = std::numeric_limits<unsigned>::max())
+    {
+        std::vector<TreeNodeIndex> nodeOps(nNodes(tree) + 1);
+        bool converged = rebalanceDecision(tree.data(), counts.data(), nNodes(tree), bucketSize, nodeOps.data());
+
+        std::vector<KeyType> tmpTree;
+        rebalanceTree(tree, tmpTree, nodeOps.data());
+        swap(tree, tmpTree);
+
+        counts.resize(nNodes(tree));
+        computeNodeCounts(tree.data(), counts.data(), nNodes(tree), firstKey, lastKey, maxCount);
 
         return converged;
     }
 
-    std::vector<keyType> codes_;
-    std::vector<countType> counts_;
-    unsigned bucketSize_;
+    template<class KeyType>
+    std::tuple<std::vector<KeyType>, std::vector<unsigned>>
+    computeOctree(const KeyType *codesStart,
+                  const KeyType *codesEnd,
+                  unsigned bucketSize,
+                  unsigned maxCount = std::numeric_limits<unsigned>::max())
+    {
+        std::vector<KeyType> tree{0, nodeRange<KeyType>(0)};
+        std::vector<unsigned> counts{unsigned(codesEnd - codesStart)};
 
-};
+        while (!updateOctree(codesStart, codesEnd, bucketSize, tree, counts, maxCount));
 
-#endif //BVH2_CSARRAY_H
+        return std::make_tuple(std::move(tree), std::move(counts));
+    }
+
+    template<class KeyType = std::uint64_t>
+    class OctreeBuilder
+    {
+    public:
+        explicit OctreeBuilder(unsigned bucketSize)
+                : bucketSize_(bucketSize)
+        {}
+
+        std::tuple<std::vector<KeyType>, std::vector<unsigned>> build(
+                const KeyType *codesStart, const KeyType *codesEnd,
+                unsigned maxCount = std::numeric_limits<unsigned>::max())
+        {
+            return computeOctree(codesStart, codesEnd, bucketSize_, maxCount);
+        }
+
+    private:
+        unsigned bucketSize_;
+    };
+
+}
+
+#endif // BVH2_CSARRAY_H
