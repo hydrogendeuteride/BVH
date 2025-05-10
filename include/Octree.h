@@ -36,6 +36,9 @@ namespace cstone
         return a == b ? sizeof(KeyType) * 8 : __builtin_clzll(a ^ b);
     }
 
+    /*! map a binary node index to an octree node index
+     *
+     */
     template<class KeyType>
     inline constexpr TreeNodeIndex binaryKeyWeight(KeyType key, unsigned level)
     {
@@ -48,6 +51,10 @@ namespace cstone
         return ret;
     }
 
+    /*! combine internal and leaf tree parts into a single array with the nodeKey prefixes
+     *
+     *  prefixes: output octree SFC keys, length @p numInternalNodes + numLeafNodes
+     */
     template<class KeyType>
     void createUnsortedLayoutCpu(const KeyType *leaves,
                                  TreeNodeIndex numInternalNodes,
@@ -73,6 +80,9 @@ namespace cstone
         }
     }
 
+    /*! extract parent/child relationships from binary tree and translate to sorted order
+     *
+     */
     template<class KeyType>
     void linkTreeCpu(const KeyType *prefixes,
                      TreeNodeIndex numInternalNodes,
@@ -106,6 +116,7 @@ namespace cstone
         }
     }
 
+    //! determine the octree subdivision level boundaries
     template<class KeyType>
     void getLevelRangeCpu(const KeyType *nodeKeys, TreeNodeIndex numNodes, TreeNodeIndex *levelRange)
     {
@@ -166,6 +177,158 @@ namespace cstone
         linkTreeCpu(prefixes, numInternalNodes, leafToInternal, levelRange, childOffsets, parents);
     }
 
+    template<class KeyType>
+    struct OctreeView
+    {
+        using NodeType = std::conditional_t<std::is_const_v<KeyType>, const TreeNodeIndex, TreeNodeIndex>;
+        TreeNodeIndex numLeafNodes;
+        TreeNodeIndex numInternalNodes;
+        TreeNodeIndex numNodes;
+
+        KeyType *prefixes;
+        NodeType *childOffsets;
+        NodeType *parents;
+        NodeType *levelRange;
+        NodeType *internalToLeaf;
+        NodeType *leafToInternal;
+    };
+
+    template<class T, class KeyType>
+    struct OctreeNsView
+    {
+        const Vec3<T> *centers;
+        const Vec3<T> *sizes;
+
+        const TreeNodeIndex *childOffsets;
+        const TreeNodeIndex *internalToLeaf;
+
+        const LocalIndex *layout;
+    };
+
+    template<class T>
+    T *rawPtr(std::vector<T> &v)
+    {
+        return v.data();
+    }
+
+    template<class T>
+    const T *rawPtr(const std::vector<T> &v)
+    {
+        return v.data();
+    }
+
+    template<class KeyType>
+    class OctreeData
+    {
+    public:
+        void resize(TreeNodeIndex numCsLeafNodes)
+        {
+            numLeafNodes = numCsLeafNodes;
+            numInternalNodes = (numLeafNodes - 1) / 7;
+            numNodes = numLeafNodes + numInternalNodes;
+
+            prefixes.resize(numNodes);
+            internalToLeaf.resize(numNodes);
+            leafToInternal.resize(numNodes);
+            childOffsets.resize(numNodes + 1);
+
+            TreeNodeIndex parentSize = std::max(1, (numNodes - 1) / 8);
+            parents.resize(parentSize);
+
+            levelRange.resize(maxTreeLevel<KeyType>() + 2);
+        }
+
+        OctreeView<KeyType> data()
+        {
+            return {numLeafNodes, numInternalNodes, numNodes,
+                    rawPtr(prefixes), rawPtr(childOffsets), rawPtr(parents),
+                    rawPtr(levelRange), rawPtr(internalToLeaf), rawPtr(leafToInternal)};
+        }
+
+        OctreeView<const KeyType> data() const
+        {
+            return {numLeafNodes, numInternalNodes, numNodes,
+                    rawPtr(prefixes), rawPtr(childOffsets), rawPtr(parents),
+                    rawPtr(levelRange), rawPtr(internalToLeaf), rawPtr(leafToInternal)};
+        }
+
+        TreeNodeIndex numNodes{0};
+        TreeNodeIndex numLeafNodes{0};
+        TreeNodeIndex numInternalNodes{0};
+
+        std::vector<KeyType> prefixes;
+        std::vector<TreeNodeIndex> childOffsets;
+        std::vector<TreeNodeIndex> parents;
+        std::vector<TreeNodeIndex> levelRange;
+
+        std::vector<TreeNodeIndex> internalToLeaf;
+        std::vector<TreeNodeIndex> leafToInternal;
+    };
+
+    template<class KeyType>
+    void buildLinkedTree(const KeyType *leaves, OctreeView<KeyType> o)
+    {
+        buildOctreeCpu(leaves, o.numLeafNodes, o.numInternalNodes, o.prefixes, o.childOffsets, o.parents, o.levelRange,
+                       o.internalToLeaf, o.leafToInternal);
+    }
+
+    template<class KeyType, class T>
+    void
+    nodeFpCenters(const KeyType *prefixes, TreeNodeIndex numNodes, Vec3<T> *centers, Vec3<T> *sizes, const Box<T> &box)
+    {
+#pragma omp parallel for schedule(static)
+        for (size_t i = 0; i < numNodes; ++i)
+        {
+            KeyType prefix = prefixes[i];
+            KeyType startKey = decodePlaceholderBit(prefix);
+            unsigned level = decodePrefixLength(prefix) / 3;
+            auto nodeBox = hilbertIBox(startKey, level);
+            std::tie(centers[i], sizes[i]) = centerAndSize<KeyType>(nodeBox, box);
+        }
+    }
+
+    template<class KeyType = std::uint64_t>
+    class Octree
+    {
+    public:
+        explicit Octree(unsigned bucketSize)
+                : bucketSize_(bucketSize)
+        {
+        }
+
+        void build(const KeyType *codesStart, const KeyType *codesEnd)
+        {
+            auto [cstree, counts] = computeOctree(codesStart, codesEnd, bucketSize_);
+
+            octreeData_.resize(nNodes(cstree));
+
+            buildLinkedTree(cstree.data(), octreeData_.data());
+
+            cstoneTree_ = std::move(cstree);
+            nodeCounts_ = std::move(counts);
+        }
+
+        OctreeView<const KeyType> view() const
+        {
+            return octreeData_.data();
+        }
+
+        const std::vector<KeyType> &cornerstone() const
+        {
+            return cstoneTree_;
+        }
+
+        const std::vector<unsigned> &counts() const
+        {
+            return nodeCounts_;
+        }
+
+    private:
+        unsigned bucketSize_;
+        OctreeData<KeyType> octreeData_;
+        std::vector<KeyType> cstoneTree_;
+        std::vector<unsigned> nodeCounts_;
+    };
 }
 
 #endif //BVH2_OCTREE_H

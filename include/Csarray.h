@@ -56,6 +56,9 @@ namespace cstone
         return std::min(count, maxCount);
     }
 
+    /*! count number of particles in each octree node
+     *  
+     */
     template<class KeyType>
     void computeNodeCounts(const KeyType *tree,
                            unsigned *counts,
@@ -71,6 +74,9 @@ namespace cstone
         }
     }
 
+    /*! return the sibling index and level of the specified csTree node
+     *
+     */
     template<class KeyType>
     inline std::tuple<int, unsigned> siblingAndLevel(const KeyType *csTree, TreeNodeIndex nodeIdx)
     {
@@ -90,6 +96,7 @@ namespace cstone
         return {siblingIdx, level};
     }
 
+    //! returns 0 for merging, 1 for no-change, 8 for splitting
     template<class KeyType>
     int calculateNodeOp(const KeyType *tree, TreeNodeIndex nodeIdx, const unsigned *counts, unsigned bucketSize)
     {
@@ -112,6 +119,9 @@ namespace cstone
         return 1;
     }
 
+    /*! Compute split or fuse decision for each octree node in parallel
+     *
+     */
     template<class KeyType, class LocalIndex>
     bool rebalanceDecision(
             const KeyType *tree, const unsigned *counts, TreeNodeIndex nNodes, unsigned bucketSize, LocalIndex *nodeOps)
@@ -136,6 +146,9 @@ namespace cstone
         return converged;
     }
 
+    /*! transform old nodes into new nodes based on opcodes
+     *
+     */
     template<class KeyType>
     void processNode(TreeNodeIndex nodeIndex, const KeyType *oldTree, const TreeNodeIndex *nodeOps, KeyType *newTree)
     {
@@ -157,6 +170,9 @@ namespace cstone
         }
     }
 
+    /*! split or fuse octree nodes based on node counts relative to bucketSize
+     *
+     */
     template<class InputVector, class OutputVector>
     void rebalanceTree(const InputVector &tree, OutputVector &newTree, TreeNodeIndex *nodeOps)
     {
@@ -175,6 +191,9 @@ namespace cstone
         newTree.back() = tree.back();
     }
 
+    /*! update the octree with a single rebalance/count step
+     *
+     */
     template<class KeyType>
     bool updateOctree(const KeyType *firstKey,
                       const KeyType *lastKey,
