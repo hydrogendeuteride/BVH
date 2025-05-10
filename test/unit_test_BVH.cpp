@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "BVH.h"
+#include "bvh/BVH.h"
 #include <random>
 #include <chrono>
 #include <vector>

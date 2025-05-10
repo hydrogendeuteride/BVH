@@ -1,6 +1,6 @@
 #include <iostream>
 #include <iomanip>
-#include "BVH.h"
+#include "bvh/BVH.h"
 
 void exampleUsage()
 {

@@ -1,9 +1,9 @@
 #ifndef BVH2_BVH_H
 #define BVH2_BVH_H
 
-#include "BoundingBox.h"
-#include "MortonCode.h"
-#include "ParallelRadixSort.h"
+#include "util/BoundingBox.h"
+#include "util/MortonCode.h"
+#include "util/ParallelRadixSort.h"
 #include <vector>
 #include <algorithm>
 #include <atomic>
