@@ -8,44 +8,22 @@
 #include <vector>
 #include <limits>
 
+#include "util/Bitops.h"
+
 namespace cstone
 {
 
     using TreeNodeIndex = int;
     using LocalIndex = unsigned;
 
-    template<class Vector>
+    template<typename Vector>
     std::size_t nNodes(const Vector &tree)
     {
         assert(tree.size());
         return tree.size() - 1;
     }
 
-    template<class KeyType>
-    unsigned treeLevel(KeyType range)
-    {
-        return static_cast<unsigned>(__builtin_ctzll(range) / 3);
-    }
-
-    template<class KeyType>
-    KeyType nodeRange(unsigned level)
-    {
-        return KeyType{1} << (3 * level);
-    }
-
-    template<class KeyType>
-    int octalDigit(KeyType code, unsigned level)
-    {
-        return static_cast<int>((code >> (3 * level)) & 0x7ull);
-    }
-
-    template<class KeyType>
-    constexpr unsigned maxTreeLevel()
-    {
-        return sizeof(KeyType) * 8 / 3;
-    }
-
-    template<class KeyType>
+    template<typename KeyType>
     unsigned calculateNodeCount(
             KeyType nodeStart, KeyType nodeEnd, const KeyType *codesStart, const KeyType *codesEnd, size_t maxCount)
     {
@@ -59,7 +37,7 @@ namespace cstone
     /*! count number of particles in each octree node
      *  
      */
-    template<class KeyType>
+    template<typename KeyType>
     void computeNodeCounts(const KeyType *tree,
                            unsigned *counts,
                            TreeNodeIndex numNodes,
@@ -77,7 +55,7 @@ namespace cstone
     /*! return the sibling index and level of the specified csTree node
      *
      */
-    template<class KeyType>
+    template<typename KeyType>
     inline std::tuple<int, unsigned> siblingAndLevel(const KeyType *csTree, TreeNodeIndex nodeIdx)
     {
         KeyType thisNode = csTree[nodeIdx];
@@ -97,7 +75,7 @@ namespace cstone
     }
 
     //! returns 0 for merging, 1 for no-change, 8 for splitting
-    template<class KeyType>
+    template<typename KeyType>
     int calculateNodeOp(const KeyType *tree, TreeNodeIndex nodeIdx, const unsigned *counts, unsigned bucketSize)
     {
         auto [siblingIdx, level] = siblingAndLevel(tree, nodeIdx);
@@ -122,7 +100,7 @@ namespace cstone
     /*! Compute split or fuse decision for each octree node in parallel
      *
      */
-    template<class KeyType, class LocalIndex>
+    template<typename KeyType, typename LocalIndex>
     bool rebalanceDecision(
             const KeyType *tree, const unsigned *counts, TreeNodeIndex nNodes, unsigned bucketSize, LocalIndex *nodeOps)
     {
@@ -149,7 +127,7 @@ namespace cstone
     /*! transform old nodes into new nodes based on opcodes
      *
      */
-    template<class KeyType>
+    template<typename KeyType>
     void processNode(TreeNodeIndex nodeIndex, const KeyType *oldTree, const TreeNodeIndex *nodeOps, KeyType *newTree)
     {
         KeyType thisNode = oldTree[nodeIndex];
@@ -173,7 +151,7 @@ namespace cstone
     /*! split or fuse octree nodes based on node counts relative to bucketSize
      *
      */
-    template<class InputVector, class OutputVector>
+    template<typename InputVector, typename OutputVector>
     void rebalanceTree(const InputVector &tree, OutputVector &newTree, TreeNodeIndex *nodeOps)
     {
         TreeNodeIndex numNodes = nNodes(tree);
@@ -194,7 +172,7 @@ namespace cstone
     /*! update the octree with a single rebalance/count step
      *
      */
-    template<class KeyType>
+    template<typename KeyType>
     bool updateOctree(const KeyType *firstKey,
                       const KeyType *lastKey,
                       unsigned bucketSize,
@@ -215,7 +193,7 @@ namespace cstone
         return converged;
     }
 
-    template<class KeyType>
+    template<typename KeyType>
     std::tuple<std::vector<KeyType>, std::vector<unsigned>>
     computeOctree(const KeyType *codesStart,
                   const KeyType *codesEnd,
@@ -230,7 +208,7 @@ namespace cstone
         return std::make_tuple(std::move(tree), std::move(counts));
     }
 
-    template<class KeyType = std::uint64_t>
+    template<typename KeyType = std::uint64_t>
     class OctreeBuilder
     {
     public:
