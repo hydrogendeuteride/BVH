@@ -4,6 +4,8 @@
 #include "util/BoundingBox.h"
 #include "util/MortonCode.h"
 #include "util/ParallelRadixSort.h"
+#include <taskflow/taskflow.hpp>
+#include <taskflow/algorithm/for_each.hpp>
 #include <vector>
 #include <algorithm>
 #include <atomic>
@@ -181,7 +183,7 @@ std::vector<MortonPrimitive> generateMortonCodes(const std::vector<Primitive> &p
 }
 
 std::vector<BVHNode>
-buildBVH(const std::vector<Primitive> &primitives, const std::vector<MortonPrimitive> &mortonPrimitives)
+buildBVH(tf::Executor &executor, const std::vector<Primitive> &primitives, const std::vector<MortonPrimitive> &mortonPrimitives)
 {
     uint32_t numPrimitives = static_cast<uint32_t>(primitives.size());
 
@@ -200,109 +202,102 @@ buildBVH(const std::vector<Primitive> &primitives, const std::vector<MortonPrimi
 
     std::vector<BVHNode> nodes(totalNodes);
 
-#pragma omp parallel for
-    for (size_t i = 0; i < totalNodes; ++i)
-    {
+    tf::Taskflow tf;
+
+    auto taskInit = tf.for_each_index(0u, totalNodes, 1u, [&](uint32_t i) {
         nodes[i].object_idx = (i >= numInternalNodes) ? i - numInternalNodes : 0xFFFFFFFF;
         nodes[i].parent_idx = 0;
         nodes[i].isLeaf = (i >= numInternalNodes);
-    }
+    });
 
-#pragma omp parallel for
-    for (uint32_t idx = 0; idx < numInternalNodes; ++idx)
-    {
+    auto taskInternal = tf.for_each_index(0u, numInternalNodes, 1u, [&](uint32_t idx) {
         BVHNode &node = nodes[idx];
 
         const PrimitiveRange range = determineRange(idx, numPrimitives, mortonPrimitives);
-        const int gamma = findSplit(mortonPrimitives, numPrimitives, range.first, range.last);
+        const uint32_t gamma = findSplit(mortonPrimitives, numPrimitives, range.first, range.last);
 
-        nodes[idx].left_idx = gamma;
-        nodes[idx].right_idx = gamma + 1;
+        node.left_idx = gamma;
+        node.right_idx = gamma + 1;
 
-        if (std::min(range.first, range.last) == gamma)
-        {
-            nodes[idx].left_idx += numInternalNodes;
-        }
-        if (std::max(range.first, range.last) == gamma + 1)
-        {
-            nodes[idx].right_idx += numInternalNodes;
-        }
+        if (std::min(range.first, range.last) == gamma) node.left_idx += numInternalNodes;
+        if (std::max(range.first, range.last) == gamma + 1) node.right_idx += numInternalNodes;
 
-        nodes[nodes[idx].left_idx].parent_idx = idx;
-        nodes[nodes[idx].right_idx].parent_idx = idx;
-    }
+        nodes[node.left_idx].parent_idx = idx;
+        nodes[node.right_idx].parent_idx = idx;
+    });
 
-#pragma omp parallel for
-    for (uint32_t idx = 0; idx < numPrimitives; ++idx)
-    {
+    auto taskLeaf = tf.for_each_index(0u, numPrimitives, 1u, [&](uint32_t idx) {
         BVHNode &node = nodes[idx + numInternalNodes];
-        uint32_t primIdx = mortonPrimitives[idx].primitiveIndex;
-        node.object_idx = primIdx;
-        node.bounds = primitives[primIdx].bounds;
-    }
+        uint32_t pIdx = mortonPrimitives[idx].primitiveIndex;
+        node.object_idx = pIdx;
+        node.bounds = primitives[pIdx].bounds;
+    });
 
     //-------------------------------------------------------------------------------------------------------------
-    std::vector<std::atomic<int>> flags(numInternalNodes);
-    for (uint32_t i = 0; i < numInternalNodes; ++i)
-    {
-        flags[i].store(0);
-    }
+    auto taskBounds = tf.emplace([&]() {
+        std::vector<std::atomic<int>> flags(numInternalNodes);
+        for (uint32_t i = 0; i < numInternalNodes; ++i) flags[i].store(0);
 
-#pragma omp parallel for
-    for (uint32_t idx = numInternalNodes; idx < totalNodes; ++idx)
-    {
-        uint32_t parent = nodes[idx].parent_idx;
-
-        while (parent != 0 || flags[0].load() != 0)
+        for (uint32_t idx = numInternalNodes; idx < totalNodes; ++idx)
         {
-            int expected = 0;
-            bool wasFirst = flags[parent].compare_exchange_strong(expected, 1);
+            uint32_t parent = nodes[idx].parent_idx;
 
-            if (wasFirst)
+            while (parent != 0 || flags[0].load() != 0)
             {
-                break;
-            }
-            else
-            {
-                BVHNode &parentNode = nodes[parent];
-                BVHNode &leftChild = nodes[parentNode.left_idx];
-                BVHNode &rightChild = nodes[parentNode.right_idx];
+                int expected = 0;
+                bool first = flags[parent].compare_exchange_strong(expected, 1);
 
-                for (int j = 0; j < 3; ++j)
+                if (first)
                 {
-                    parentNode.bounds.min[j] = std::min(leftChild.bounds.min[j], rightChild.bounds.min[j]);
-                    parentNode.bounds.max[j] = std::max(leftChild.bounds.max[j], rightChild.bounds.max[j]);
+                    break;
                 }
+                else
+                {
+                    BVHNode &parentNode = nodes[parent];
+                    BVHNode &leftChild = nodes[parentNode.left_idx];
+                    BVHNode &rightChild = nodes[parentNode.right_idx];
 
-                uint32_t nextParent = parentNode.parent_idx;
-                parent = nextParent;
+                    for (int j = 0; j < 3; ++j)
+                    {
+                        parentNode.bounds.min[j] = std::min(leftChild.bounds.min[j], rightChild.bounds.min[j]);
+                        parentNode.bounds.max[j] = std::max(leftChild.bounds.max[j], rightChild.bounds.max[j]);
+                    }
+
+                    parent = parentNode.parent_idx;
+                }
             }
         }
-    }
 
-    if (numInternalNodes > 0 && flags[0].load() == 0)
-    {
-        BVHNode &rootNode = nodes[0];
-        BVHNode &leftChild = nodes[rootNode.left_idx];
-        BVHNode &rightChild = nodes[rootNode.right_idx];
-
-        for (int j = 0; j < 3; ++j)
+        if (numInternalNodes > 0 && flags[0].load() == 0)
         {
-            rootNode.bounds.min[j] = std::min(leftChild.bounds.min[j], rightChild.bounds.min[j]);
-            rootNode.bounds.max[j] = std::max(leftChild.bounds.max[j], rightChild.bounds.max[j]);
+            BVHNode &rootNode = nodes[0];
+            BVHNode &leftChild = nodes[rootNode.left_idx];
+            BVHNode &rightChild = nodes[rootNode.right_idx];
+
+            for (int j = 0; j < 3; ++j)
+            {
+                rootNode.bounds.min[j] = std::min(leftChild.bounds.min[j], rightChild.bounds.min[j]);
+                rootNode.bounds.max[j] = std::max(leftChild.bounds.max[j], rightChild.bounds.max[j]);
+            }
         }
-    }
+    });
+
+    taskInit.precede(taskInternal, taskLeaf);
+    taskInternal.precede(taskBounds);
+    taskLeaf.precede(taskBounds);
+
+    executor.run(tf).wait();
 
     return nodes;
 }
 
-std::vector<BVHNode> buildLBVH(const std::vector<Primitive> &primitives)
+std::vector<BVHNode> buildLBVH(tf::Executor &executor, const std::vector<Primitive> &primitives)
 {
     if (primitives.empty()) return {};
 
     std::vector<MortonPrimitive> mortonPrimitives = generateMortonCodes(primitives);
 
-    return buildBVH(primitives, mortonPrimitives);
+    return buildBVH(executor, primitives, mortonPrimitives);
 }
 
 #endif //BVH2_BVH_H

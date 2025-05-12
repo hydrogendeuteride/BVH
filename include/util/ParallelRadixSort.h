@@ -3,23 +3,24 @@
 
 #include <vector>
 #include <omp.h>
+#include <taskflow/taskflow.hpp>
 #include "MortonCode.h"
 
-void ChunkedRadixSort(std::vector<MortonPrimitive> &mortonPrimitives)
+void ChunkedRadixSort(tf::Executor &executor, std::vector<MortonPrimitive> &mortonPrimitives)
 {
     const size_t n = mortonPrimitives.size();
     if (n <= 1) return;
 
     std::vector<MortonPrimitive> temp(n);
 
-    constexpr int BITS_PER_PASS = 8 ;
+    constexpr int BITS_PER_PASS = 8;
     constexpr int NUM_PASSES = 64 / BITS_PER_PASS;
     constexpr int NUM_BUCKETS = 1 << BITS_PER_PASS;
 
     std::vector<MortonPrimitive> *src = &mortonPrimitives;
     std::vector<MortonPrimitive> *dst = &temp;
 
-    int maxThreads = omp_get_max_threads();
+    const int maxThreads = executor.num_workers();
 
     for (int pass = 0; pass < NUM_PASSES; pass++)
     {
@@ -28,80 +29,82 @@ void ChunkedRadixSort(std::vector<MortonPrimitive> &mortonPrimitives)
 
         std::vector<std::vector<int>> threadHistogram(maxThreads, std::vector<int>(NUM_BUCKETS, 0));
 
-#pragma omp parallel
+        tf::Taskflow taskflow;
+
+        std::vector<tf::Task> hist_tasks;
+        hist_tasks.reserve(maxThreads);
+
+        for (int t = 0; t < maxThreads; t++)
         {
-            int tid = omp_get_thread_num();
-            auto &localHist = threadHistogram[tid];
-
-#pragma omp for nowait
-            for (size_t i = 0; i < n; ++i)
-            {
-                uint64_t code = (*src)[i].mortonCode;
-                uint64_t bucket = (code & mask) >> shift;
-
-                if (bucket < NUM_BUCKETS)
-                {
-                    ++localHist[bucket];
-                }
-                else
-                {
-                    bucket = NUM_BUCKETS - 1;
-                    ++localHist[bucket];
-                }
-            }
+            hist_tasks.push_back(
+                    taskflow.emplace([&, t]() {
+                        size_t start = (n * t) / maxThreads;
+                        size_t end = (n * (t + 1)) / maxThreads;
+                        auto &localHist = threadHistogram[t];
+                        for (size_t i = start; i < end; i++)
+                        {
+                            uint64_t code = (*src)[i].mortonCode;
+                            uint64_t bucket = (code & mask) >> shift;
+                            localHist[bucket]++;
+                        }
+                    })
+            );
         }
 
         std::vector<int> globalOffsets(NUM_BUCKETS, 0);
         std::vector<std::vector<int>> threadOffsets(maxThreads, std::vector<int>(NUM_BUCKETS, 0));
 
-        for (int b = 0; b < NUM_BUCKETS; b++)
-        {
-            uint64_t sum = 0;
-            for (int t = 0; t < maxThreads; ++t)
+        auto reduce = taskflow.emplace([&]() {
+            uint64_t prefix = 0;
+            for (int b = 0; b < NUM_BUCKETS; ++b)
             {
-                threadOffsets[t][b] = sum;
-                sum += threadHistogram[t][b];
-            }
-            globalOffsets[b] = sum;
-        }
+                uint64_t sum = 0;
 
-        uint64_t prefixSum = 0;
-        for (int b = 0; b < NUM_BUCKETS; ++b)
-        {
-            uint64_t count = globalOffsets[b];
-            globalOffsets[b] += prefixSum;
-
-            for (int t = 0; t < maxThreads; ++t)
-            {
-                threadOffsets[t][b] += prefixSum;
-            }
-
-            prefixSum += count;
-        }
-
-#pragma omp parallel
-        {
-            uint64_t tid = omp_get_thread_num();
-            auto &localOffsets = threadOffsets[tid];
-
-#pragma omp for nowait
-            for (int i = 0; i < n; ++i)
-            {
-                uint64_t code = (*src)[i].mortonCode;
-                uint64_t bucket = (code & mask) >> shift;
-                if (bucket < NUM_BUCKETS)
+                for (int t = 0; t < maxThreads; ++t)
                 {
-                    uint64_t pos = localOffsets[bucket]++;
-                    (*dst)[pos] = (*src)[i];
+                    threadOffsets[t][b] = sum;
+                    sum += threadHistogram[t][b];
                 }
-                else
+
+                globalOffsets[b] = sum;
+
+                for (int t = 0; t < maxThreads; ++t)
                 {
-                    bucket = NUM_BUCKETS - 1;
-                    uint64_t pos = localOffsets[bucket]++;
-                    (*dst)[pos] = (*src)[i];
+                    threadOffsets[t][b] += prefix;
                 }
+                prefix += sum;
             }
+        });
+
+        for (auto &ht: hist_tasks)
+        {
+            reduce.succeed(ht);
         }
+
+        std::vector<tf::Task> scatter_tasks;
+        scatter_tasks.reserve(maxThreads);
+
+        for (int t = 0; t < maxThreads; t++)
+        {
+            scatter_tasks.push_back(
+                    taskflow.emplace([&, t]() {
+                        size_t start = (n * t) / maxThreads;
+                        size_t end = (n * (t + 1)) / maxThreads;
+                        auto &localOff = threadOffsets[t];
+                        for (size_t i = start; i < end; i++)
+                        {
+                            uint64_t code = (*src)[i].mortonCode;
+                            uint64_t bucket = (code & mask) >> shift;
+                            uint64_t pos = localOff[bucket]++;
+                            (*dst)[pos] = (*src)[i];
+                        }
+                    })
+            );
+
+            scatter_tasks.back().succeed(reduce);
+        }
+
+        executor.run(taskflow).wait();
 
         std::swap(src, dst);
     }

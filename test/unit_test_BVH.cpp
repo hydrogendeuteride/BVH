@@ -146,7 +146,8 @@ protected:
 TEST_F(BVHTest, EmptyInput)
 {
     std::vector<Primitive> emptyPrimitives;
-    auto nodes = buildLBVH(emptyPrimitives);
+    tf::Executor executor{ std::thread::hardware_concurrency() };
+    auto nodes = buildLBVH(executor, emptyPrimitives);
     EXPECT_TRUE(nodes.empty());
 }
 
@@ -157,7 +158,8 @@ TEST_F(BVHTest, SinglePrimitive)
     p.bounds.max[0] = p.bounds.max[1] = p.bounds.max[2] = 1.0f;
 
     std::vector<Primitive> primitives = {p};
-    auto nodes = buildLBVH(primitives);
+    tf::Executor executor{ std::thread::hardware_concurrency() };
+    auto nodes = buildLBVH(executor, primitives);
 
     EXPECT_EQ(nodes.size(), 1);
     EXPECT_TRUE(nodes[0].isLeaf);
@@ -181,7 +183,8 @@ TEST_F(BVHTest, SimpleCase)
     p2.bounds.max[0] = p2.bounds.max[1] = p2.bounds.max[2] = 2.0f;
 
     std::vector<Primitive> primitives = {p1, p2};
-    auto nodes = buildLBVH(primitives);
+    tf::Executor executor{ std::thread::hardware_concurrency() };
+    auto nodes = buildLBVH(executor, primitives);
 
     EXPECT_EQ(nodes.size(), 3);
 
@@ -209,7 +212,8 @@ TEST_F(BVHTest, SortedPrimitives)
         primitives.push_back(p);
     }
 
-    auto nodes = buildLBVH(primitives);
+    tf::Executor executor{ std::thread::hardware_concurrency() };
+    auto nodes = buildLBVH(executor, primitives);
 
     EXPECT_EQ(nodes.size(), 2 * count - 1);
 
@@ -238,7 +242,9 @@ TEST_F(BVHTest, RandomPrimitives)
     for (int count: {10, 100})
     {
         auto primitives = generateRandomPrimitives(count);
-        auto nodes = buildLBVH(primitives);
+        tf::Executor executor{ std::thread::hardware_concurrency() };
+
+        auto nodes = buildLBVH(executor, primitives);
 
         EXPECT_EQ(nodes.size(), 2 * count - 1);
 
@@ -249,13 +255,15 @@ TEST_F(BVHTest, RandomPrimitives)
 
 TEST_F(BVHTest, PerformanceTest)
 {
-    for (int count: {1000, 1000000})
+    for (int count: {10000, 1000000})
     {
         auto primitives = generateRandomPrimitives(count);
 
+        tf::Executor executor{ std::thread::hardware_concurrency() };
+
         auto start = std::chrono::high_resolution_clock::now();
 
-        auto nodes = buildLBVH(primitives);
+        auto nodes = buildLBVH(executor, primitives);
 
         auto end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> elapsed = end - start;
@@ -283,7 +291,8 @@ TEST_F(BVHTest, AllPrimitivesAtSamePosition)
         primitives[i].bounds.max[0] = primitives[i].bounds.max[1] = primitives[i].bounds.max[2] = 1.0f;
     }
 
-    auto nodes = buildLBVH(primitives);
+    tf::Executor executor{ std::thread::hardware_concurrency() };
+    auto nodes = buildLBVH(executor, primitives);
 
     EXPECT_EQ(nodes.size(), 2 * count - 1);
 

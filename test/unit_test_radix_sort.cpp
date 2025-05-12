@@ -13,7 +13,8 @@ TEST(ChunkedRadixSortTest, BasicSorting)
             {3, 2}
     };
 
-    ChunkedRadixSort(primitives);
+    tf::Executor executor{ std::thread::hardware_concurrency() };
+    ChunkedRadixSort(executor, primitives);
 
     EXPECT_EQ(primitives[0].mortonCode, 1);
     EXPECT_EQ(primitives[1].mortonCode, 2);
@@ -30,7 +31,8 @@ TEST(ChunkedRadixSortTest, AlreadySorted)
             {3, 3}
     };
 
-    ChunkedRadixSort(primitives);
+    tf::Executor executor{ std::thread::hardware_concurrency() };
+    ChunkedRadixSort(executor, primitives);
 
     EXPECT_EQ(primitives[0].mortonCode, 0);
     EXPECT_EQ(primitives[1].mortonCode, 1);
@@ -42,7 +44,8 @@ TEST(ChunkedRadixSortTest, EmptyVector)
 {
     std::vector<MortonPrimitive> primitives;
 
-    ChunkedRadixSort(primitives);
+    tf::Executor executor{ std::thread::hardware_concurrency() };
+    ChunkedRadixSort(executor, primitives);
 
     EXPECT_TRUE(primitives.empty());
 }
@@ -51,7 +54,8 @@ TEST(ChunkedRadixSortTest, SingleElement)
 {
     std::vector<MortonPrimitive> primitives = {{0, 7}};
 
-    ChunkedRadixSort(primitives);
+    tf::Executor executor{ std::thread::hardware_concurrency() };
+    ChunkedRadixSort(executor, primitives);
 
     EXPECT_EQ(primitives[0].mortonCode, 7);
 }
@@ -65,7 +69,8 @@ TEST(ChunkedRadixSortTest, DuplicatedMortonCodes)
             {3, 3}
     };
 
-    ChunkedRadixSort(primitives);
+    tf::Executor executor{ std::thread::hardware_concurrency() };
+    ChunkedRadixSort(executor, primitives);
 
     EXPECT_EQ(primitives[0].mortonCode, 1);
     EXPECT_EQ(primitives[1].mortonCode, 2);
@@ -96,11 +101,14 @@ TEST(ChunkedRadixSortTest, RandomDataSorting)
               [](const MortonPrimitive &a, const MortonPrimitive &b) {
                   return a.mortonCode < b.mortonCode;
               });
+
     auto end = std::chrono::high_resolution_clock::now();
     auto stdSortDuration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
+    tf::Executor executor{ std::thread::hardware_concurrency() };
+
     start = std::chrono::high_resolution_clock::now();
-    ChunkedRadixSort(primitives);
+    ChunkedRadixSort(executor, primitives);
     end = std::chrono::high_resolution_clock::now();
     auto radixDuration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
