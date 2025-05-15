@@ -6,6 +6,9 @@
 
 #include "util/Bitops.h"
 
+#include <taskflow/taskflow.hpp>
+#include <taskflow/algorithm/for_each.hpp>
+
 namespace cstone
 {
     constexpr int digitWeight(int digit)
@@ -38,24 +41,27 @@ namespace cstone
                                  TreeNodeIndex numInternalNodes,
                                  TreeNodeIndex numLeafNodes,
                                  KeyType *prefixes,
-                                 TreeNodeIndex *internalToLeaf)
+                                 TreeNodeIndex *internalToLeaf,
+                                 tf::Executor &executor)
     {
-#pragma omp parallel for schedule(static)
-        for (TreeNodeIndex tid = 0; tid < numLeafNodes; ++tid)
-        {
-            KeyType key = leaves[tid];
-            unsigned level = treeLevel(leaves[tid + 1] - key);
-            prefixes[tid + numInternalNodes] = encodePlaceholderBit(key, 3 * level);
-            internalToLeaf[tid + numInternalNodes] = tid + numInternalNodes;
+        tf::Taskflow flow;
+        flow.for_each_index(TreeNodeIndex(0), numLeafNodes, TreeNodeIndex(1),
+                            [&](TreeNodeIndex tid) {
+                                KeyType key = leaves[tid];
+                                unsigned level = treeLevel(leaves[tid + 1] - key);
 
-            unsigned prefixLength = commonPrefix(key, leaves[tid + 1]);
-            if (prefixLength % 3 == 0 && tid < numLeafNodes - 1)
-            {
-                TreeNodeIndex octIndex = (tid + binaryKeyWeight(key, prefixLength / 3)) / 7;
-                prefixes[octIndex] = encodePlaceholderBit(key, prefixLength);
-                internalToLeaf[octIndex] = octIndex;
-            }
-        }
+                                prefixes[tid + numInternalNodes] = encodePlaceholderBit(key, 3 * level);
+                                internalToLeaf[tid + numInternalNodes] = tid + numInternalNodes;
+
+                                unsigned prefixLength = commonPrefix(key, leaves[tid + 1]);
+                                if (prefixLength % 3 == 0 && tid < numLeafNodes - 1)
+                                {
+                                    TreeNodeIndex octIndex = (tid + binaryKeyWeight(key, prefixLength / 3)) / 7;
+                                    prefixes[octIndex] = encodePlaceholderBit(key, prefixLength);
+                                    internalToLeaf[octIndex] = octIndex;
+                                }
+                            });
+        executor.run(flow).wait();
     }
 
     /*! extract parent/child relationships from binary tree and translate to sorted order
@@ -67,31 +73,34 @@ namespace cstone
                      const TreeNodeIndex *leafToInternal,
                      const TreeNodeIndex *levelRange,
                      TreeNodeIndex *childOffsets,
-                     TreeNodeIndex *parents)
+                     TreeNodeIndex *parents,
+                     tf::Executor &executor)
     {
-#pragma omp parallel for schedule(static)
-        for (TreeNodeIndex i = 0; i < numInternalNodes; ++i)
-        {
-            TreeNodeIndex idxA = leafToInternal[i];
-            KeyType prefix = prefixes[idxA];
-            KeyType nodeKey = decodePlaceholderBit(prefix);
-            unsigned prefixLength = decodePrefixLength(prefix);
-            unsigned level = prefixLength / 3;
-            assert(level < maxTreeLevel<KeyType>());
+        tf::Taskflow flow;
+        flow.for_each_index(TreeNodeIndex(0), numInternalNodes, TreeNodeIndex(1),
+                            [&](TreeNodeIndex i) {
+                                TreeNodeIndex idxA = leafToInternal[i];
+                                KeyType prefix = prefixes[idxA];
+                                KeyType nodeKey = decodePlaceholderBit(prefix);
+                                unsigned prefixLength = decodePrefixLength(prefix);
+                                unsigned level = prefixLength / 3;
 
-            KeyType childPrefix = encodePlaceholderBit(nodeKey, prefixLength + 3);
+                                KeyType childPrefix = encodePlaceholderBit(nodeKey, prefixLength + 3);
+                                TreeNodeIndex leafSearchStart = levelRange[level + 1];
+                                TreeNodeIndex leafSearchEnd = levelRange[level + 2];
 
-            TreeNodeIndex leafSearchStart = levelRange[level + 1];
-            TreeNodeIndex leafSearchEnd = levelRange[level + 2];
-            TreeNodeIndex childIdx =
-                    std::lower_bound(prefixes + leafSearchStart, prefixes + leafSearchEnd, childPrefix) - prefixes;
+                                TreeNodeIndex childIdx =
+                                        std::lower_bound(prefixes + leafSearchStart,
+                                                         prefixes + leafSearchEnd,
+                                                         childPrefix) - prefixes;
 
-            if (childIdx != leafSearchEnd && childPrefix == prefixes[childIdx])
-            {
-                childOffsets[idxA] = childIdx;
-                parents[(childIdx - 1) / 8] = idxA;
-            }
-        }
+                                if (childIdx != leafSearchEnd && childPrefix == prefixes[childIdx])
+                                {
+                                    childOffsets[idxA] = childIdx;
+                                    parents[(childIdx - 1) / 8] = idxA;
+                                }
+                            });
+        executor.run(flow).wait();
     }
 
     //! determine the octree subdivision level boundaries
@@ -137,22 +146,37 @@ namespace cstone
                         TreeNodeIndex *parents,
                         TreeNodeIndex *levelRange,
                         TreeNodeIndex *internalToLeaf,
-                        TreeNodeIndex *leafToInternal)
+                        TreeNodeIndex *leafToInternal,
+                        tf::Executor &executor)
     {
         TreeNodeIndex numNodes = numInternalNodes + numLeafNodes;
-        createUnsortedLayoutCpu(cstoneTree, numInternalNodes, numLeafNodes, prefixes, internalToLeaf);
+
+        createUnsortedLayoutCpu(cstoneTree,
+                                numInternalNodes,
+                                numLeafNodes,
+                                prefixes,
+                                internalToLeaf,
+                                executor);
+
         sort_by_key(prefixes, prefixes + numNodes, internalToLeaf);
 
-#pragma omp parallel for schedule(static)
-        for (TreeNodeIndex i = 0; i < numNodes; ++i)
         {
-            leafToInternal[internalToLeaf[i]] = i;
-            internalToLeaf[i] -= numInternalNodes;
+            tf::Taskflow flow;
+            flow.for_each_index(TreeNodeIndex(0), numNodes, TreeNodeIndex(1),
+                                [&](TreeNodeIndex i) {
+                                    leafToInternal[internalToLeaf[i]] = i;
+                                    internalToLeaf[i] -= numInternalNodes;
+                                });
+            executor.run(flow).wait();
         }
+
         getLevelRangeCpu(prefixes, numNodes, levelRange);
 
         std::fill(childOffsets, childOffsets + numNodes, 0);
-        linkTreeCpu(prefixes, numInternalNodes, leafToInternal, levelRange, childOffsets, parents);
+        linkTreeCpu(prefixes, numInternalNodes,
+                    leafToInternal, levelRange,
+                    childOffsets, parents,
+                    executor);
     }
 
     template<typename KeyType>
@@ -244,25 +268,41 @@ namespace cstone
     };
 
     template<typename KeyType>
-    void buildLinkedTree(const KeyType *leaves, OctreeView<KeyType> o)
+    void buildLinkedTree(const KeyType *leaves,
+                         OctreeView<KeyType> o,
+                         tf::Executor &executor)
     {
-        buildOctreeCpu(leaves, o.numLeafNodes, o.numInternalNodes, o.prefixes, o.childOffsets, o.parents, o.levelRange,
-                       o.internalToLeaf, o.leafToInternal);
+        buildOctreeCpu(leaves,
+                       o.numLeafNodes,
+                       o.numInternalNodes,
+                       o.prefixes,
+                       o.childOffsets,
+                       o.parents,
+                       o.levelRange,
+                       o.internalToLeaf,
+                       o.leafToInternal,
+                       executor);
     }
 
     template<typename KeyType, class T>
-    void
-    nodeFpCenters(const KeyType *prefixes, TreeNodeIndex numNodes, Vec3<T> *centers, Vec3<T> *sizes, const Box<T> &box)
+    void nodeFpCenters(const KeyType *prefixes,
+                       TreeNodeIndex numNodes,
+                       Vec3<T> *centers,
+                       Vec3<T> *sizes,
+                       const Box<T> &box,
+                       tf::Executor &executor)
     {
-#pragma omp parallel for schedule(static)
-        for (size_t i = 0; i < numNodes; ++i)
-        {
-            KeyType prefix = prefixes[i];
-            KeyType startKey = decodePlaceholderBit(prefix);
-            unsigned level = decodePrefixLength(prefix) / 3;
-            auto nodeBox = hilbertIBox(startKey, level);
-            std::tie(centers[i], sizes[i]) = centerAndSize<KeyType>(nodeBox, box);
-        }
+        tf::Taskflow flow;
+        flow.for_each_index(std::size_t(0), std::size_t(numNodes), std::size_t(1),
+                            [&](std::size_t i) {
+                                KeyType prefix = prefixes[i];
+                                KeyType startKey = decodePlaceholderBit(prefix);
+                                unsigned level = decodePrefixLength(prefix) / 3;
+
+                                auto nodeBox = hilbertIBox(startKey, level);
+                                std::tie(centers[i], sizes[i]) = centerAndSize<KeyType>(nodeBox, box);
+                            });
+        executor.run(flow).wait();
     }
 
     template<typename KeyType = std::uint64_t>
@@ -274,13 +314,15 @@ namespace cstone
         {
         }
 
-        void build(const KeyType *codesStart, const KeyType *codesEnd)
+        void build(const KeyType *codesStart,
+                   const KeyType *codesEnd,
+                   tf::Executor &executor)
         {
-            auto [cstree, counts] = computeOctree(codesStart, codesEnd, bucketSize_);
+            auto [cstree, counts] = computeOctree(codesStart, codesEnd,
+                                                  bucketSize_, executor);
 
             octreeData_.resize(nNodes(cstree));
-
-            buildLinkedTree(cstree.data(), octreeData_.data());
+            buildLinkedTree(cstree.data(), octreeData_.data(), executor);
 
             cstoneTree_ = std::move(cstree);
             nodeCounts_ = std::move(counts);

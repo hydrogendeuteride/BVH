@@ -7,6 +7,8 @@
 #include <tuple>
 #include <vector>
 #include <limits>
+#include <taskflow/taskflow.hpp>
+#include <taskflow/algorithm/for_each.hpp>
 
 #include "util/Bitops.h"
 
@@ -43,13 +45,14 @@ namespace cstone
                            TreeNodeIndex numNodes,
                            const KeyType *codesStart,
                            const KeyType *codesEnd,
-                           unsigned maxCount)
+                           unsigned maxCount,
+                           tf::Executor &executor)
     {
-#pragma omp parallel for schedule(static)
-        for (TreeNodeIndex i = 0; i < numNodes; ++i)
-        {
+        tf::Taskflow flow;
+        flow.for_each_index(TreeNodeIndex(0), numNodes, TreeNodeIndex(1), [&](TreeNodeIndex i) {
             counts[i] = calculateNodeCount(tree[i], tree[i + 1], codesStart, codesEnd, maxCount);
-        }
+        });
+        executor.run(flow).wait();
     }
 
     /*! return the sibling index and level of the specified csTree node
@@ -102,25 +105,33 @@ namespace cstone
      */
     template<typename KeyType, typename LocalIndex>
     bool rebalanceDecision(
-            const KeyType *tree, const unsigned *counts, TreeNodeIndex nNodes, unsigned bucketSize, LocalIndex *nodeOps)
+            const KeyType *tree,
+            const unsigned *counts,
+            TreeNodeIndex nNodes,
+            unsigned bucketSize,
+            LocalIndex *nodeOps,
+            tf::Executor &executor)
     {
         bool converged = true;
 
-#pragma omp parallel
-        {
-            bool convergedThread = true;
-#pragma omp for
-            for (TreeNodeIndex i = 0; i < nNodes; ++i)
-            {
-                int decision = calculateNodeOp(tree, i, counts, bucketSize);
-                if (decision != 1)
-                { convergedThread = false; }
+        tf::Taskflow flow;
 
-                nodeOps[i] = decision;
-            }
-            if (!convergedThread)
-            { converged = false; }
-        }
+        std::vector<TreeNodeIndex> indices(nNodes);
+        std::iota(indices.begin(), indices.end(), 0);
+
+        auto compute = flow.for_each(indices.begin(), indices.end(), [&](TreeNodeIndex i) {
+            int decision = calculateNodeOp(tree, i, counts, bucketSize);
+            nodeOps[i] = decision;
+        });
+
+        auto reduce = flow.emplace([&]() {
+            converged = std::all_of(nodeOps, nodeOps + nNodes,
+                                    [](int v) { return v == 1; });
+        });
+
+        compute.precede(reduce);
+
+        executor.run(flow).wait();
         return converged;
     }
 
@@ -152,7 +163,10 @@ namespace cstone
      *
      */
     template<typename InputVector, typename OutputVector>
-    void rebalanceTree(const InputVector &tree, OutputVector &newTree, TreeNodeIndex *nodeOps)
+    void rebalanceTree(const InputVector &tree,
+                       OutputVector &newTree,
+                       TreeNodeIndex *nodeOps,
+                       tf::Executor &executor)
     {
         TreeNodeIndex numNodes = nNodes(tree);
 
@@ -161,11 +175,11 @@ namespace cstone
 
         newTree.resize(newNumNodes + 1);
 
-#pragma omp parallel for schedule(static)
-        for (TreeNodeIndex i = 0; i < numNodes; ++i)
-        {
+        tf::Taskflow flow;
+        flow.for_each_index(TreeNodeIndex(0), numNodes, TreeNodeIndex(1), [&](TreeNodeIndex i) {
             processNode(i, tree.data(), nodeOps, newTree.data());
-        }
+        });
+        executor.run(flow).wait();
         newTree.back() = tree.back();
     }
 
@@ -178,17 +192,20 @@ namespace cstone
                       unsigned bucketSize,
                       std::vector<KeyType> &tree,
                       std::vector<unsigned> &counts,
+                      tf::Executor &executor,
                       unsigned maxCount = std::numeric_limits<unsigned>::max())
     {
         std::vector<TreeNodeIndex> nodeOps(nNodes(tree) + 1);
-        bool converged = rebalanceDecision(tree.data(), counts.data(), nNodes(tree), bucketSize, nodeOps.data());
+        bool converged = rebalanceDecision(tree.data(), counts.data(), nNodes(tree), bucketSize,
+                                           nodeOps.data(),executor);
 
         std::vector<KeyType> tmpTree;
         rebalanceTree(tree, tmpTree, nodeOps.data());
         swap(tree, tmpTree);
 
         counts.resize(nNodes(tree));
-        computeNodeCounts(tree.data(), counts.data(), nNodes(tree), firstKey, lastKey, maxCount);
+        computeNodeCounts(tree.data(), counts.data(), nNodes(tree), firstKey,
+                          lastKey, maxCount, executor);
 
         return converged;
     }
@@ -198,12 +215,13 @@ namespace cstone
     computeOctree(const KeyType *codesStart,
                   const KeyType *codesEnd,
                   unsigned bucketSize,
+                  tf::Executor&  executor,
                   unsigned maxCount = std::numeric_limits<unsigned>::max())
     {
         std::vector<KeyType> tree{0, nodeRange<KeyType>(0)};
         std::vector<unsigned> counts{unsigned(codesEnd - codesStart)};
 
-        while (!updateOctree(codesStart, codesEnd, bucketSize, tree, counts, maxCount));
+        while (!updateOctree(codesStart, codesEnd, bucketSize, tree, counts, executor,maxCount));
 
         return std::make_tuple(std::move(tree), std::move(counts));
     }
@@ -218,9 +236,10 @@ namespace cstone
 
         std::tuple<std::vector<KeyType>, std::vector<unsigned>> build(
                 const KeyType *codesStart, const KeyType *codesEnd,
+                tf::Executor&  executor,
                 unsigned maxCount = std::numeric_limits<unsigned>::max())
         {
-            return computeOctree(codesStart, codesEnd, bucketSize_, maxCount);
+            return computeOctree(codesStart, codesEnd, bucketSize_, executor,maxCount);
         }
 
     private:
