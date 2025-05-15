@@ -200,7 +200,7 @@ namespace cstone
                                            nodeOps.data(),executor);
 
         std::vector<KeyType> tmpTree;
-        rebalanceTree(tree, tmpTree, nodeOps.data());
+        rebalanceTree(tree, tmpTree, nodeOps.data(), executor);
         swap(tree, tmpTree);
 
         counts.resize(nNodes(tree));

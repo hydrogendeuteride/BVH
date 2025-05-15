@@ -111,6 +111,12 @@ constexpr KeyType encodePlaceholderBit(KeyType code, int prefixLength)
 }
 
 template<typename KeyType>
+constexpr unsigned decodePrefixLength(KeyType code)
+{
+    return 8 * sizeof(KeyType) - 1 - countLeadingZeros(code);
+}
+
+template<typename KeyType>
 constexpr KeyType decodePlaceholderBit(KeyType code)
 {
     int prefixLength = decodePrefixLength(code);
@@ -118,12 +124,6 @@ constexpr KeyType decodePlaceholderBit(KeyType code)
     KeyType ret = code ^ placeHolderMask;
 
     return ret << (3 * maxTreeLevel<KeyType>{} - prefixLength);
-}
-
-template<typename KeyType>
-constexpr unsigned decodePrefixLength(KeyType code)
-{
-    return 8 * sizeof(KeyType) - 1 - countLeadingZeros(code);
 }
 
 template<typename KeyType>
