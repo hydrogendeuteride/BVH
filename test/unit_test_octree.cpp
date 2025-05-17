@@ -7,6 +7,7 @@
 #include "octree/Octree.h"
 
 using KeyType = std::uint64_t;
+using TreeNodeIndex = int;
 
 std::vector<KeyType> makeRandomCodes(std::size_t n, uint64_t seed = 42)
 {
@@ -21,10 +22,44 @@ std::vector<KeyType> makeRandomCodes(std::size_t n, uint64_t seed = 42)
     return codes;
 }
 
+void traverseOctree(
+        const unsigned long *prefixes,
+        const cstone::OctreeView<const uint64_t> &view,
+        cstone::TreeNodeIndex nodeIdx = 0,
+        int depth = 0
+)
+{
+    std::string indent(depth * 2, ' ');
+
+    uint64_t packed = prefixes[nodeIdx];
+    uint64_t key = decodePlaceholderBit(packed);
+    unsigned lvl = decodePrefixLength(packed) / 3;
+
+    std::cout << indent
+              << "[L" << lvl << "] idx=" << nodeIdx
+              << "  key=" << key
+              << "  prefixLen=" << (lvl * 3)
+              << '\n';
+
+    TreeNodeIndex childStart = view.childOffsets[nodeIdx];
+    if (childStart == 0) return;
+
+    for (int i = 0; i < 8; ++i)
+    {
+        TreeNodeIndex childIdx = childStart + i;
+        if (childIdx >= view.numNodes) break;
+        if (view.parents[(childIdx - 1) / 8] != nodeIdx) continue;
+
+        traverseOctree(prefixes, view, childIdx, depth + 1);
+    }
+}
+
 TEST(Octree, DebugPrint)
 {
     constexpr unsigned bucketSize = 16;
     std::vector<KeyType> codes = makeRandomCodes(100);
+
+    std::size_t nParticles = codes.size();
 
     tf::Executor executor;
     cstone::Octree<KeyType> oct(bucketSize);
@@ -67,5 +102,51 @@ TEST(Octree, DebugPrint)
     {
         std::cout << "[Leaf " << i << "] parent = "
                   << view.parents[i / 8] << "\n";
+    }
+
+    const auto &prefixes = view.prefixes;
+    std::cout << "\n=== Octree Structure ===\n";
+    traverseOctree(prefixes, view);
+
+    //cornerstone array generation test?
+    EXPECT_EQ(tree.size(), counts.size() + 1);
+    EXPECT_EQ(std::accumulate(counts.begin(), counts.end(), size_t(0)), nParticles);
+    for (size_t i = 0; i + 1 < tree.size(); ++i)
+    {
+        EXPECT_LT(tree[i], tree[i + 1]) << "tree not strictly increasing at " << i;
+    }
+
+    for (auto c: counts)
+    {
+        EXPECT_LE(c, bucketSize) << "bucketSize exceeded";
+    }
+
+    for (TreeNodeIndex i = 0; i + 1 < view.numNodes; ++i)
+    {
+        EXPECT_LE(view.prefixes[i], view.prefixes[i + 1])
+                            << "prefixes not sorted at " << i;
+    }
+
+    //parent-child relation pointer test
+    for (TreeNodeIndex pid = 0; pid < view.numInternalNodes; ++pid)
+    {
+        TreeNodeIndex childStart = view.childOffsets[pid];
+        if (childStart == 0) continue;
+        for (int j = 0; j < 8; ++j)
+        {
+            TreeNodeIndex cid = childStart + j;
+            if (cid >= view.numNodes) break;
+            EXPECT_EQ(view.parents[(cid - 1) / 8], pid)
+                                << "parent mismatch: child " << cid;
+        }
+    }
+
+    //leaf node internal node matching test
+    for (TreeNodeIndex lid = 0; lid < view.numLeafNodes; ++lid)
+    {
+        TreeNodeIndex sortedIdx = view.leafToInternal[lid];
+        EXPECT_EQ(view.internalToLeaf[sortedIdx] + view.numInternalNodes,
+                  lid)
+                            << "leaf↔internal mapping broken at leaf " << lid;
     }
 }
