@@ -4,6 +4,7 @@
 #include "util/BoundingBox.h"
 #include "util/MortonCode.h"
 #include "util/ParallelRadixSort.h"
+#include "util/Bitops.h"
 #include <taskflow/taskflow.hpp>
 #include <taskflow/algorithm/for_each.hpp>
 #include <vector>
@@ -25,8 +26,10 @@ struct BVHNode
     bool isLeaf;
 };
 
+template<typename MortonCodeType>
 inline uint32_t
-findSplit(const std::vector<MortonPrimitive> &mortonPrimitives, const uint32_t numPrimitives, uint32_t first,
+findSplit(const std::vector<MortonPrimitive<MortonCodeType>> &mortonPrimitives, const uint32_t numPrimitives,
+          uint32_t first,
           uint32_t last)
 {
     if (first == last)
@@ -34,15 +37,15 @@ findSplit(const std::vector<MortonPrimitive> &mortonPrimitives, const uint32_t n
         return first;
     }
 
-    uint64_t firstCode = mortonPrimitives[first].mortonCode;
-    uint64_t lastCode = mortonPrimitives[last].mortonCode;
+    MortonCodeType firstCode = mortonPrimitives[first].mortonCode;
+    MortonCodeType lastCode = mortonPrimitives[last].mortonCode;
 
     if (firstCode == lastCode)
     {
         return (first + last) >> 1;
     }
 
-    uint32_t commonPrefix = __builtin_clzll(firstCode ^ lastCode);
+    uint32_t commonPrefix = countLeadingZeros(firstCode ^ lastCode);
 
     uint32_t split = first;
     uint32_t step = last - first;
@@ -54,8 +57,8 @@ findSplit(const std::vector<MortonPrimitive> &mortonPrimitives, const uint32_t n
 
         if (newSplit < last)
         {
-            uint64_t splitCode = mortonPrimitives[newSplit].mortonCode;
-            uint32_t splitPrefix = __builtin_clzll(firstCode ^ splitCode);
+            MortonCodeType splitCode = mortonPrimitives[newSplit].mortonCode;
+            uint32_t splitPrefix = countLeadingZeros(firstCode ^ splitCode);
 
             if (splitPrefix > commonPrefix)
             {
@@ -73,20 +76,23 @@ struct PrimitiveRange
     uint32_t last;
 };
 
-inline int commonUpperBits(uint64_t a, uint64_t b)
+template<typename MortonCodeType>
+inline int commonUpperBits(MortonCodeType a, MortonCodeType b)
 {
-    return __builtin_clzll(a ^ b);
+    return countLeadingZeros(a ^ b);
 }
 
+template<typename MortonCodeType>
 inline PrimitiveRange
-determineRange(uint32_t idx, uint32_t numPrimitives, const std::vector<MortonPrimitive> &mortonPrimitives)
+determineRange(uint32_t idx, uint32_t numPrimitives,
+               const std::vector<MortonPrimitive<MortonCodeType>> &mortonPrimitives)
 {
     if (idx == 0)
     {
         return {0, numPrimitives - 1};
     }
 
-    uint64_t mortonCode = mortonPrimitives[idx].mortonCode;
+    MortonCodeType mortonCode = mortonPrimitives[idx].mortonCode;
 
     const int L_delta = (idx > 0) ? commonUpperBits(mortonCode, mortonPrimitives[idx - 1].mortonCode) : -1;
 
@@ -143,7 +149,8 @@ determineRange(uint32_t idx, uint32_t numPrimitives, const std::vector<MortonPri
     return {idx, jdx};
 }
 
-std::vector<MortonPrimitive> generateMortonCodes(const std::vector<Primitive> &primitives)
+template<typename MortonCodeType>
+std::vector<MortonPrimitive<MortonCodeType>> generateMortonCodes(const std::vector<Primitive> &primitives)
 {
     BoundingBox sceneBounds;
     for (const auto &prim: primitives)
@@ -162,18 +169,18 @@ std::vector<MortonPrimitive> generateMortonCodes(const std::vector<Primitive> &p
         if (sceneExtent[i] < 1e-6f) sceneExtent[i] = 1e-6f;
     }
 
-    std::vector<MortonPrimitive> mortonPrimitives(primitives.size());
+    std::vector<MortonPrimitive<MortonCodeType>> mortonPrimitives(primitives.size());
     for (int i = 0; i < primitives.size(); ++i)
     {
         float centroid[3];
         primitives[i].bounds.centroid(centroid);
 
         mortonPrimitives[i].primitiveIndex = static_cast<uint32_t>(i);
-        mortonPrimitives[i].mortonCode = computeMortonCode(centroid, sceneMin, sceneExtent);
+        mortonPrimitives[i].mortonCode = computeMortonCode<MortonCodeType>(centroid, sceneMin, sceneExtent);
     }
 
     std::sort(mortonPrimitives.begin(), mortonPrimitives.end(),
-              [](const MortonPrimitive &a, const MortonPrimitive &b) {
+              [](const MortonPrimitive<MortonCodeType> &a, const MortonPrimitive<MortonCodeType> &b) {
                   return a.mortonCode < b.mortonCode;
               });
 
@@ -182,8 +189,10 @@ std::vector<MortonPrimitive> generateMortonCodes(const std::vector<Primitive> &p
     return mortonPrimitives;
 }
 
+template<typename MortonCodeType>
 std::vector<BVHNode>
-buildBVH(tf::Executor &executor, const std::vector<Primitive> &primitives, const std::vector<MortonPrimitive> &mortonPrimitives)
+buildBVH(tf::Executor &executor, const std::vector<Primitive> &primitives,
+         const std::vector<MortonPrimitive<MortonCodeType>> &mortonPrimitives)
 {
     uint32_t numPrimitives = static_cast<uint32_t>(primitives.size());
 
@@ -291,13 +300,14 @@ buildBVH(tf::Executor &executor, const std::vector<Primitive> &primitives, const
     return nodes;
 }
 
+template<typename MortonCodeType = uint64_t>
 std::vector<BVHNode> buildLBVH(tf::Executor &executor, const std::vector<Primitive> &primitives)
 {
     if (primitives.empty()) return {};
 
-    std::vector<MortonPrimitive> mortonPrimitives = generateMortonCodes(primitives);
+    std::vector<MortonPrimitive<MortonCodeType>> mortonPrimitives = generateMortonCodes<MortonCodeType>(primitives);
 
-    return buildBVH(executor, primitives, mortonPrimitives);
+    return buildBVH<MortonCodeType>(executor, primitives, mortonPrimitives);
 }
 
 #endif //BVH2_BVH_H

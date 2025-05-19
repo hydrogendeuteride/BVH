@@ -2,8 +2,7 @@
 #define BVH2_OCTREE_H
 
 #include "Csarray.h"
-#include "Hilbert.h"
-
+#include "util/Hilbert.h"
 #include "util/Bitops.h"
 
 #include <taskflow/taskflow.hpp>

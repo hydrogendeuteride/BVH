@@ -6,7 +6,7 @@
 
 TEST(ChunkedRadixSortTest, BasicSorting)
 {
-    std::vector<MortonPrimitive> primitives = {
+    std::vector<MortonPrimitive<uint32_t>> primitives = {
             {0, 6},
             {1, 1},
             {2, 5},
@@ -24,7 +24,7 @@ TEST(ChunkedRadixSortTest, BasicSorting)
 
 TEST(ChunkedRadixSortTest, AlreadySorted)
 {
-    std::vector<MortonPrimitive> primitives = {
+    std::vector<MortonPrimitive<uint32_t>> primitives = {
             {0, 0},
             {1, 1},
             {2, 2},
@@ -42,7 +42,7 @@ TEST(ChunkedRadixSortTest, AlreadySorted)
 
 TEST(ChunkedRadixSortTest, EmptyVector)
 {
-    std::vector<MortonPrimitive> primitives;
+    std::vector<MortonPrimitive<uint32_t>> primitives;
 
     tf::Executor executor{ std::thread::hardware_concurrency() };
     ChunkedRadixSort(executor, primitives);
@@ -52,7 +52,7 @@ TEST(ChunkedRadixSortTest, EmptyVector)
 
 TEST(ChunkedRadixSortTest, SingleElement)
 {
-    std::vector<MortonPrimitive> primitives = {{0, 7}};
+    std::vector<MortonPrimitive<uint32_t>> primitives = {{0, 7}};
 
     tf::Executor executor{ std::thread::hardware_concurrency() };
     ChunkedRadixSort(executor, primitives);
@@ -62,7 +62,7 @@ TEST(ChunkedRadixSortTest, SingleElement)
 
 TEST(ChunkedRadixSortTest, DuplicatedMortonCodes)
 {
-    std::vector<MortonPrimitive> primitives = {
+    std::vector<MortonPrimitive<uint32_t>> primitives = {
             {0, 2},
             {1, 1},
             {2, 2},
@@ -78,9 +78,9 @@ TEST(ChunkedRadixSortTest, DuplicatedMortonCodes)
     EXPECT_EQ(primitives[3].mortonCode, 3);
 }
 
-std::vector<MortonPrimitive> generateRandomMortonPrimitives(size_t count)
+std::vector<MortonPrimitive<uint64_t>> generateRandomMortonPrimitives(size_t count)
 {
-    std::vector<MortonPrimitive> primitives;
+    std::vector<MortonPrimitive<uint64_t>> primitives;
     std::mt19937 rng(std::random_device{}());
     std::uniform_int_distribution<uint64_t> dist(0, 0xFFFFFFFFFFFFFFFFULL);
     for (size_t i = 0; i < count; ++i)
@@ -98,7 +98,7 @@ TEST(ChunkedRadixSortTest, RandomDataSorting)
 
     auto start = std::chrono::high_resolution_clock::now();
     std::sort(expected.begin(), expected.end(),
-              [](const MortonPrimitive &a, const MortonPrimitive &b) {
+              [](const MortonPrimitive<uint64_t> &a, const MortonPrimitive<uint64_t> &b) {
                   return a.mortonCode < b.mortonCode;
               });
 

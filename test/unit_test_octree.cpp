@@ -104,6 +104,15 @@ TEST(Octree, DebugPrint)
                   << view.parents[i / 8] << "\n";
     }
 
+    std::cout << "\n=== Level info ===\n";
+    for (int i = 0; i < 4; ++i)
+    {
+        int numNodes = oct.view().levelRange[i + 1] - oct.view().levelRange[i];
+        if (numNodes == 0)
+        { break; }
+        std::cout << "number of nodes at level " << i << ": " << numNodes << std::endl;
+    }
+
     const auto &prefixes = view.prefixes;
     std::cout << "\n=== Octree Structure ===\n";
     traverseOctree(prefixes, view);
@@ -149,4 +158,235 @@ TEST(Octree, DebugPrint)
                   lid)
                             << "leaf↔internal mapping broken at leaf " << lid;
     }
+}
+
+std::vector<float> generateRandomCoordinates(size_t numPoints, float min = -100.0f, float max = 100.0f)
+{
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> dis(min, max);
+
+    std::vector<float> coords(numPoints * 3);
+    for (size_t i = 0; i < coords.size(); ++i)
+    {
+        coords[i] = dis(gen);
+    }
+    return coords;
+}
+
+void
+splitCoordinates(const std::vector<float> &coords, std::vector<float> &x, std::vector<float> &y, std::vector<float> &z)
+{
+    size_t numPoints = coords.size() / 3;
+    x.resize(numPoints);
+    y.resize(numPoints);
+    z.resize(numPoints);
+    for (size_t i = 0; i < numPoints; ++i)
+    {
+        x[i] = coords[i * 3];
+        y[i] = coords[i * 3 + 1];
+        z[i] = coords[i * 3 + 2];
+    }
+}
+
+// Hilbert 코드로 변환
+std::vector<KeyType> generateHilbertCodes(const std::vector<float> &coords, const Box<float> &box)
+{
+    size_t numPoints = coords.size() / 3;
+    std::vector<KeyType> codes(numPoints);
+
+    for (size_t i = 0; i < numPoints; ++i)
+    {
+        float x = coords[i * 3];
+        float y = coords[i * 3 + 1];
+        float z = coords[i * 3 + 2];
+        codes[i] = hilbert3D<KeyType>(x, y, z, box);
+    }
+
+    return codes;
+}
+
+TEST(OctreePerformance, BuildTime)
+{
+    std::vector<size_t> pointCounts = {1000, 10000, 100000, 1000000};
+
+    std::vector<double> buildTimes;
+    std::vector<double> perPointTimes;
+
+    tf::Executor executor(std::thread::hardware_concurrency());
+
+    std::cout << "\n=== Octree Build Performance Test ===\n";
+    std::cout << "| #Points | Build Time (ms) | Time per Point (ns) |\n";
+    std::cout << "|---------|-----------------|---------------------|\n";
+
+    for (size_t numPoints: pointCounts)
+    {
+        auto coords = generateRandomCoordinates(numPoints);
+
+        Box<float> box;
+        for (size_t i = 0; i < numPoints; ++i)
+        {
+            Vec3<float> point(coords[i * 3], coords[i * 3 + 1], coords[i * 3 + 2]);
+            box.expand(point);
+        }
+
+        for (int i = 0; i < 3; ++i)
+        {
+            float range = box.max[i] - box.min[i];
+            box.min[i] -= range * 0.01f;
+            box.max[i] += range * 0.01f;
+        }
+
+        std::vector<float> x, y, z;
+        splitCoordinates(coords, x, y, z);
+
+        auto start = std::chrono::high_resolution_clock::now();
+        std::vector<KeyType> codes(numPoints);
+        computeSfcKeys(x.data(), y.data(), z.data(), codes.data(), numPoints, box, executor);
+        auto codeEnd = std::chrono::high_resolution_clock::now();
+
+        std::sort(codes.begin(), codes.end());
+        auto sortEnd = std::chrono::high_resolution_clock::now();
+
+        unsigned bucketSize = 16;
+        cstone::Octree<KeyType> octree(bucketSize);
+        auto buildStart = std::chrono::high_resolution_clock::now();
+        octree.build(codes.data(), codes.data() + codes.size(), executor);
+        auto buildEnd = std::chrono::high_resolution_clock::now();
+
+        auto codeTime = std::chrono::duration<double, std::milli>(codeEnd - start).count();
+        auto sortTime = std::chrono::duration<double, std::milli>(sortEnd - codeEnd).count();
+        auto octreeTime = std::chrono::duration<double, std::milli>(buildEnd - buildStart).count();
+        auto totalTime = std::chrono::duration<double, std::milli>(buildEnd - start).count();
+
+        double timePerPoint = (totalTime * 1e6) / numPoints;
+
+        buildTimes.push_back(totalTime);
+        perPointTimes.push_back(timePerPoint);
+
+        std::cout << "| " << std::setw(7) << numPoints << " | "
+                  << std::setw(15) << std::fixed << std::setprecision(2) << totalTime << " | "
+                  << std::setw(19) << std::fixed << std::setprecision(2) << timePerPoint << " |\n";
+
+        std::cout << "  - Key generation: " << std::fixed << std::setprecision(2) << codeTime << " ms\n";
+        std::cout << "  - Key sorting:    " << std::fixed << std::setprecision(2) << sortTime << " ms\n";
+        std::cout << "  - Octree build:   " << std::fixed << std::setprecision(2) << octreeTime << " ms\n";
+
+        const auto &tree = octree.cornerstone();
+        const auto &counts = octree.counts();
+        const auto view = octree.view();
+
+        std::cout << "  - Node count: " << tree.size() - 1 << " (internal: " << view.numInternalNodes
+                  << ", leaf: " << view.numLeafNodes << ")\n";
+
+        double avgFill = 0.0;
+        if (!counts.empty())
+        {
+            avgFill = static_cast<double>(numPoints) / counts.size();
+        }
+        std::cout << "  - Avg. bucket fill: " << std::fixed << std::setprecision(2) << avgFill
+                  << " / " << bucketSize << " (" << (avgFill / bucketSize * 100) << "%)\n";
+
+        std::cout << "\n";
+    }
+
+    if (buildTimes.size() >= 2)
+    {
+        std::cout << "=== Scalability Analysis ===\n";
+        for (size_t i = 1; i < pointCounts.size(); ++i)
+        {
+            double ratio = pointCounts[i] / static_cast<double>(pointCounts[i - 1]);
+            double timeRatio = buildTimes[i] / buildTimes[i - 1];
+
+            std::cout << pointCounts[i - 1] << " → " << pointCounts[i] << " points: "
+                      << "Data x" << std::fixed << std::setprecision(1) << ratio << ", "
+                      << "Time x" << std::fixed << std::setprecision(2) << timeRatio << "\n";
+
+            double linearRatio = ratio;
+            double logLinearRatio = ratio * std::log2(pointCounts[i]) / std::log2(pointCounts[i - 1]);
+
+            std::cout << "  - Linear expected (O(n)):    " << std::fixed << std::setprecision(2) << linearRatio
+                      << "x\n";
+            std::cout << "  - Log-linear expected (O(n log n)): " << std::fixed << std::setprecision(2)
+                      << logLinearRatio << "x\n";
+        }
+    }
+
+    EXPECT_FALSE(buildTimes.empty());
+    for (double time: buildTimes)
+    {
+        EXPECT_GT(time, 0.0);
+    }
+}
+
+TEST(OctreePerformance, ThreadScaling)
+{
+    std::vector<int> threadCounts = {1, 2, 4, 8, 16};
+    if (std::thread::hardware_concurrency() > 16)
+    {
+        threadCounts.push_back(std::thread::hardware_concurrency());
+    }
+
+    const size_t numPoints = 1000000;
+    auto coords = generateRandomCoordinates(numPoints);
+
+    Box<float> box;
+    for (size_t i = 0; i < numPoints; ++i)
+    {
+        Vec3<float> point(coords[i * 3], coords[i * 3 + 1], coords[i * 3 + 2]);
+        box.expand(point);
+    }
+
+    std::vector<float> x, y, z;
+    splitCoordinates(coords, x, y, z);
+
+    std::vector<KeyType> codes(numPoints);
+    tf::Executor executor16(16);
+    computeSfcKeys(x.data(), y.data(), z.data(), codes.data(), numPoints, box, executor16);
+    std::sort(codes.begin(), codes.end());
+
+    std::cout << "\n=== Thread Scaling Test ===\n";
+    std::cout << "| # Threads | Build Time (ms) | Speed Improved |\n";
+    std::cout << "|-----------|----------------|----------|\n";
+
+    double baseTime = 0.0;
+
+    for (int threadCount: threadCounts)
+    {
+        tf::Executor executor(threadCount);
+
+        cstone::Octree<KeyType> octree(16);
+
+        auto start = std::chrono::high_resolution_clock::now();
+        octree.build(codes.data(), codes.data() + codes.size(), executor);
+        auto end = std::chrono::high_resolution_clock::now();
+
+        auto buildTime = std::chrono::duration<double, std::milli>(end - start).count();
+
+        double speedup = 1.0;
+        if (threadCount == threadCounts[0])
+        {
+            baseTime = buildTime;
+        }
+        else
+        {
+            speedup = baseTime / buildTime;
+        }
+
+        std::cout << "| " << std::setw(9) << threadCount << " | "
+                  << std::setw(14) << std::fixed << std::setprecision(2) << buildTime << " | "
+                  << std::setw(10) << std::fixed << std::setprecision(2) << speedup << " |\n";
+    }
+
+    std::cout << "\nTheoretical Maximum (Amdahl's Law : 90% Parallelization):\n";
+    for (int threadCount: threadCounts)
+    {
+        if (threadCount > 1)
+        {
+            double theoreticalSpeedup = 1.0 / (0.1 + 0.9 / threadCount);
+            std::cout << threadCount << " Thread: " << std::fixed << std::setprecision(2) << theoreticalSpeedup << " Times Speedup\n";
+        }
+    }
+
+    EXPECT_GT(baseTime, 0.0);
 }

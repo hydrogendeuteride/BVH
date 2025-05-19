@@ -6,19 +6,20 @@
 #include <taskflow/taskflow.hpp>
 #include "MortonCode.h"
 
-void ChunkedRadixSort(tf::Executor &executor, std::vector<MortonPrimitive> &mortonPrimitives)
+template<typename MortonCodeType>
+void ChunkedRadixSort(tf::Executor &executor, std::vector<MortonPrimitive<MortonCodeType>> &mortonPrimitives)
 {
     const size_t n = mortonPrimitives.size();
     if (n <= 1) return;
 
-    std::vector<MortonPrimitive> temp(n);
+    std::vector<MortonPrimitive<MortonCodeType>> temp(n);
 
     constexpr int BITS_PER_PASS = 8;
     constexpr int NUM_PASSES = 64 / BITS_PER_PASS;
     constexpr int NUM_BUCKETS = 1 << BITS_PER_PASS;
 
-    std::vector<MortonPrimitive> *src = &mortonPrimitives;
-    std::vector<MortonPrimitive> *dst = &temp;
+    std::vector<MortonPrimitive<MortonCodeType>> *src = &mortonPrimitives;
+    std::vector<MortonPrimitive<MortonCodeType>> *dst = &temp;
 
     const int maxThreads = executor.num_workers();
 

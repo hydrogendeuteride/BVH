@@ -147,7 +147,7 @@ TEST_F(BVHTest, EmptyInput)
 {
     std::vector<Primitive> emptyPrimitives;
     tf::Executor executor{ std::thread::hardware_concurrency() };
-    auto nodes = buildLBVH(executor, emptyPrimitives);
+    auto nodes = buildLBVH<uint32_t>(executor, emptyPrimitives);
     EXPECT_TRUE(nodes.empty());
 }
 
@@ -223,7 +223,7 @@ TEST_F(BVHTest, SortedPrimitives)
 
 TEST_F(BVHTest, FindSplit)
 {
-    std::vector<MortonPrimitive> mortonPrimitives(10);
+    std::vector<MortonPrimitive<uint32_t>> mortonPrimitives(10);
 
     for (int i = 0; i < 10; i++)
     {
