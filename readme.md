@@ -92,7 +92,6 @@ int main() {
     
     computeSfcKeys(x.data(), y.data(), z.data(), codes.data(), numPoints, box, executor);
     
-    // sort SFC keys(Optional)
     std::sort(codes.begin(), codes.end());
     
     unsigned bucketSize = 16; //example bucket size
@@ -106,6 +105,20 @@ int main() {
     return 0;
 }
 ```
+
+## Performance
+System: AMD Ryzen 7 6800HS 8 core CPU, 32GB RAM
+
+|Structure| Input Number   | Build time (ms) | # Threads |
+|---------|----------------|-----------------|----------|
+|Radix Sort| 1M uint64 keys | 30 ms           | 16       |
+|BVH| 10K Triangles  | 1.87 ms         | 1        |
+|BVH| 10K Triangles  | 1.64 ms         | 16       |
+|BVH| 1M Triangles   | 157 ms          | 16       |
+|Octree| 10K Points     | 3.36 ms         | 1        |
+|Octree| 10K Points     | 6.09 ms         | 16       |
+|Octree| 1M Points      | 102 ms          | 16       |
+
 
 ## References
 

@@ -304,7 +304,7 @@ namespace cstone
         executor.run(flow).wait();
     }
 
-    template<typename KeyType = std::uint64_t>
+    template<typename KeyType>
     class Octree
     {
     public:

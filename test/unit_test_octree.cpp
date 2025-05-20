@@ -213,7 +213,7 @@ TEST(OctreePerformance, BuildTime)
     std::vector<double> buildTimes;
     std::vector<double> perPointTimes;
 
-    tf::Executor executor(std::thread::hardware_concurrency());
+    tf::Executor executor(1);
 
     std::cout << "\n=== Octree Build Performance Test ===\n";
     std::cout << "| #Points | Build Time (ms) | Time per Point (ns) |\n";
@@ -276,7 +276,7 @@ TEST(OctreePerformance, BuildTime)
         const auto &counts = octree.counts();
         const auto view = octree.view();
 
-        std::cout << "  - Node count: " << tree.size() - 1 << " (internal: " << view.numInternalNodes
+        std::cout << "  - Node count: " << view.numNodes << " (internal: " << view.numInternalNodes
                   << ", leaf: " << view.numLeafNodes << ")\n";
 
         double avgFill = 0.0;
