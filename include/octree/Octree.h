@@ -283,7 +283,7 @@ namespace cstone
                        executor);
     }
 
-    template<typename KeyType, class T>
+    template<typename KeyType, typename T>
     void nodeFpCenters(const KeyType *prefixes,
                        TreeNodeIndex numNodes,
                        Vec3<T> *centers,
@@ -299,7 +299,7 @@ namespace cstone
                                 unsigned level = decodePrefixLength(prefix) / 3;
 
                                 auto nodeBox = hilbertIBox(startKey, level);
-                                std::tie(centers[i], sizes[i]) = centerAndSize<KeyType>(nodeBox, box);
+                                std::tie(centers[i], sizes[i]) = centerAndSize(nodeBox, box);
                             });
         executor.run(flow).wait();
     }

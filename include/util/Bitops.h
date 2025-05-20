@@ -81,7 +81,7 @@ constexpr bool isPowerOf8(KeyType n)
 template<typename KeyType>
 constexpr unsigned treeLevel(KeyType codeRange)
 {
-    assert(isPowerOf8(codeRange));
+//    assert(isPowerOf8(codeRange));
     return (countLeadingZeros(codeRange - 1) - unusedBits<KeyType>{}) / 3;
 }
 

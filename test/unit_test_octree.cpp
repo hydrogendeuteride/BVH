@@ -384,9 +384,124 @@ TEST(OctreePerformance, ThreadScaling)
         if (threadCount > 1)
         {
             double theoreticalSpeedup = 1.0 / (0.1 + 0.9 / threadCount);
-            std::cout << threadCount << " Thread: " << std::fixed << std::setprecision(2) << theoreticalSpeedup << " Times Speedup\n";
+            std::cout << threadCount << " Thread: " << std::fixed << std::setprecision(2) << theoreticalSpeedup
+                      << " Times Speedup\n";
         }
     }
 
     EXPECT_GT(baseTime, 0.0);
+}
+
+using Vec3f = Vec3<float>;
+
+static void checkParentContainsChildren(const std::vector<Vec3f> &centers,
+                                        const std::vector<Vec3f> &sizes,
+                                        const TreeNodeIndex *childOffsets,
+                                        const TreeNodeIndex *parents,
+                                        TreeNodeIndex numNodes)
+{
+    for (TreeNodeIndex parent = 0; parent < numNodes; ++parent)
+    {
+        TreeNodeIndex firstChild = childOffsets[parent];
+        if (firstChild == 0) continue;
+
+        Vec3f pMin = centers[parent] - sizes[parent];
+        Vec3f pMax = centers[parent] + sizes[parent];
+
+        for (int i = 0; i < 8; ++i)
+        {
+            TreeNodeIndex child = firstChild + i;
+            if (child >= numNodes) break;
+            if (parents[(child - 1) / 8] != parent) continue;
+
+            Vec3f cMin = centers[child] - sizes[child];
+            Vec3f cMax = centers[child] + sizes[child];
+
+            EXPECT_LE(pMin.x, cMin.x);
+            EXPECT_LE(pMin.y, cMin.y);
+            EXPECT_LE(pMin.z, cMin.z);
+
+            EXPECT_GE(pMax.x, cMax.x);
+            EXPECT_GE(pMax.y, cMax.y);
+            EXPECT_GE(pMax.z, cMax.z);
+        }
+    }
+}
+
+void traverseOctree2(
+        const KeyType *prefixes,
+        const cstone::OctreeView<const uint64_t> &view,
+        const std::vector<Vec3f> &centers,
+        const std::vector<Vec3f> &sizes,
+        cstone::TreeNodeIndex nodeIdx = 0,
+        int depth = 0)
+{
+    std::string indent(depth * 2, ' ');
+
+    uint64_t packed = prefixes[nodeIdx];
+    uint64_t key = decodePlaceholderBit(packed);
+    unsigned lvl = decodePrefixLength(packed) / 3;
+
+    const auto &c = centers[nodeIdx];
+    const auto &s = sizes[nodeIdx];
+
+    std::cout << indent
+              << "[L" << lvl << "] idx=" << nodeIdx
+              << " key=" << key
+              << " box=("
+              << c.x - s.x << "," << c.y - s.y << "," << c.z - s.z << ") – ("
+              << c.x + s.x << "," << c.y + s.y << "," << c.z + s.z << ")\n";
+
+    TreeNodeIndex childStart = view.childOffsets[nodeIdx];
+    if (childStart == 0) return;
+
+    for (int i = 0; i < 8; ++i)
+    {
+        TreeNodeIndex childIdx = childStart + i;
+        if (childIdx >= view.numNodes) break;
+        if (view.parents[(childIdx - 1) / 8] != nodeIdx) continue;
+
+        traverseOctree2(prefixes, view, centers, sizes, childIdx, depth + 1);
+    }
+}
+
+
+TEST(Octree, ParentContainsChildren)
+{
+    const int N = 100;
+    std::vector<float> x(N), y(N), z(N);
+    std::mt19937_64 rng(42);
+    std::uniform_real_distribution<float> uni(0.0f, 1.0f);
+    for (int i = 0; i < N; ++i)
+    {
+        x[i] = uni(rng);
+        y[i] = uni(rng);
+        z[i] = uni(rng);
+    }
+
+    Box<float> globalBox(Vec3f{0, 0, 0}, Vec3f{1, 1, 1});
+
+    std::vector<KeyType> keys(N);
+    tf::Executor executor;
+    computeSfcKeys(x.data(), y.data(), z.data(), keys.data(), N, globalBox, executor);
+
+    const unsigned bucketSize = 16;
+    cstone::Octree<KeyType> tree(bucketSize);
+    tree.build(keys.data(), keys.data() + keys.size(), executor);
+
+    auto view = tree.view();
+
+    std::vector<Vec3f> centers(view.numNodes);
+    std::vector<Vec3f> sizes(view.numNodes);
+    cstone::nodeFpCenters<KeyType>(view.prefixes, view.numNodes,
+                                   centers.data(), sizes.data(),
+                                   globalBox, executor);
+
+    checkParentContainsChildren(centers, sizes,
+                                view.childOffsets,
+                                view.parents,
+                                view.numNodes);
+
+    std::cout << "\n=== Tree Hierarchy Test ===" << std::endl;
+    traverseOctree2(view.prefixes, view, centers, sizes);
 }

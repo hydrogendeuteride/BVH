@@ -26,6 +26,35 @@ struct Vec3
     {
         return i == 0 ? x : (i == 1 ? y : z);
     }
+
+    Vec3 operator+(const Vec3 &other) const
+    {
+        return Vec3(x + other.x, y + other.y, z + other.z);
+    }
+
+    // 벡터 뺄셈
+    Vec3 operator-(const Vec3 &other) const
+    {
+        return Vec3(x - other.x, y - other.y, z - other.z);
+    }
+
+    // 복합 대입 연산자 +=
+    Vec3 &operator+=(const Vec3 &other)
+    {
+        x += other.x;
+        y += other.y;
+        z += other.z;
+        return *this;
+    }
+
+    // 복합 대입 연산자 -=
+    Vec3 &operator-=(const Vec3 &other)
+    {
+        x -= other.x;
+        y -= other.y;
+        z -= other.z;
+        return *this;
+    }
 };
 
 template<typename T>
@@ -160,16 +189,22 @@ struct Box
 };
 
 using BoxF = Box<float>;
-using BoxI = Box<unsigned int>;
+template<typename KeyType>
+using BoxI = Box<KeyType>;
 
 using BoundingBox = Box<float>;
 
-struct IBox : public Box<unsigned int>
+template<typename KeyType>
+struct IBox
 {
-    using Box<unsigned int>::Box;
+    KeyType xmin, xmax;
+    KeyType ymin, ymax;
+    KeyType zmin, zmax;
 
-    IBox(unsigned xmin, unsigned xmax, unsigned ymin, unsigned ymax, unsigned zmin, unsigned zmax)
-            : Box<unsigned int>(xmin, xmax, ymin, ymax, zmin, zmax)
+    IBox(KeyType xmin_, KeyType xmax_,
+         KeyType ymin_, KeyType ymax_,
+         KeyType zmin_, KeyType zmax_)
+            : xmin(xmin_), xmax(xmax_), ymin(ymin_), ymax(ymax_), zmin(zmin_), zmax(zmax_)
     {}
 };
 

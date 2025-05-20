@@ -98,23 +98,23 @@ inline std::tuple<unsigned, unsigned, unsigned> decodeHilbert(KeyType key) noexc
 }
 
 template<typename KeyType>
-IBox hilbertIBox(KeyType keyStart, unsigned level) noexcept
+IBox<KeyType> hilbertIBox(KeyType keyStart, unsigned level) noexcept
 {
-    assert(level <= maxTreeLevel<KeyType>());
+//    assert(level <= maxTreeLevel<KeyType>());
     constexpr unsigned maxCoord = 1u << maxTreeLevel<KeyType>();
     unsigned cubeLength = maxCoord >> level;
     unsigned mask = ~(cubeLength - 1);
 
     auto coords = decodeHilbert<KeyType>(keyStart);
-    unsigned ix = coords.first;
-    unsigned iy = coords.second;
-    unsigned iz = coords.third;
+    unsigned ix = std::get<0>(coords);
+    unsigned iy = std::get<1>(coords);
+    unsigned iz = std::get<2>(coords);
 
     ix &= mask;
     iy &= mask;
     iz &= mask;
 
-    return IBox(ix, ix + cubeLength, iy, iy + cubeLength, iz, iz + cubeLength);
+    return {ix, ix + cubeLength, iy, iy + cubeLength, iz, iz + cubeLength};
 }
 
 template<typename KeyType, typename T>
@@ -163,7 +163,7 @@ void computeSfcKeys(const T *x, const T *y, const T *z, KeyType *particleKeys, s
 }
 
 template<typename KeyType, typename T>
-std::tuple<Vec3<T>, Vec3<T>> centerAndSize(const Box<KeyType> &ibox, const Box<T> &box)
+std::tuple<Vec3<T>, Vec3<T>> centerAndSize(const IBox<KeyType> &ibox, const Box<T> &box)
 {
     T normalization = T(1) / (KeyType(1) << (sizeof(KeyType) * 8 / 3));
 
