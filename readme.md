@@ -6,7 +6,7 @@ Fast Linear Bounding Volume Hierarchy generation C++ header-only library with ta
 
 - LBVH (Linear Bounding Volume Hierarchy)
 - Octree
-- Quadtree (WIP)
+- Quadtree
 
 ## Installation
 
@@ -106,18 +106,48 @@ int main() {
 }
 ```
 
+Quadtree (2D)
+```c++
+#include "quadtree/Quadtree.h"
+#include "quadtree/Hilbert2D.h"
+#include "util/Box2D.h"
+#include <algorithm>
+
+int main() {
+    std::vector<float> x = {0.1f, 0.5f, 0.9f};
+    std::vector<float> y = {0.2f, 0.4f, 0.8f};
+
+    Box2D<float> box; for (size_t i=0;i<x.size();++i) box.expand({x[i],y[i]});
+
+    using KeyType = uint64_t;
+    std::vector<KeyType> keys(x.size());
+    tf::Executor ex(1);
+    computeSfcKeys2D<float,KeyType>(x.data(), y.data(), keys.data(), keys.size(), box, ex);
+    std::sort(keys.begin(), keys.end());
+
+    qtree2d::Quadtree<KeyType> qt(16);
+    qt.build(keys.data(), keys.data()+keys.size(), ex);
+
+    auto view = qt.view();
+    // view.prefixes, childOffsets, parents, levelRange, internalToLeaf, leafToInternal
+    return 0;
+}
+```
+
 ## Performance
 System: AMD Ryzen 7 6800HS 8 core CPU, 32GB RAM
 
 |Structure| Input Number   | Build time (ms) | # Threads |
-|---------|----------------|-----------------|----------|
-|Radix Sort| 1M uint64 keys | 30 ms           | 16       |
-|BVH| 10K Triangles  | 1.87 ms         | 1        |
-|BVH| 10K Triangles  | 1.64 ms         | 16       |
-|BVH| 1M Triangles   | 157 ms          | 16       |
-|Octree| 10K Points     | 3.36 ms         | 1        |
-|Octree| 10K Points     | 6.09 ms         | 16       |
-|Octree| 1M Points      | 102 ms          | 16       |
+|--------|----------------|-----------------|-----------|
+|Radix Sort| 1M uint64 keys | 30 ms           | 16        |
+|BVH| 10K Triangles  | 1.87 ms         | 1         |
+|BVH| 10K Triangles  | 1.64 ms         | 16        |
+|BVH| 1M Triangles   | 157 ms          | 16        |
+|Octree| 10K Points     | 3.36 ms         | 1         |
+|Octree| 10K Points     | 6.09 ms         | 16        |
+|Octree| 1M Points      | 102 ms          | 16        |
+|Quadtree| 10K Points     | 4.81ms          | 1         |
+|Quadtree| 1M Points      | 34.86ms         | 16        |
 
 
 ## References

@@ -10,5 +10,13 @@ target_link_libraries(unit_test_BVH PRIVATE GTest::gtest_main BVH2)
 add_executable(unit_test_octree unit_test_octree.cpp)
 target_link_libraries(unit_test_octree PRIVATE GTest::gtest_main BVH2)
 
+add_executable(unit_test_quadtree unit_test_quadtree.cpp)
+target_link_libraries(unit_test_quadtree PRIVATE GTest::gtest_main BVH2)
+
+add_executable(unit_test_quadtree_performance unit_test_quadtree_performance.cpp)
+target_link_libraries(unit_test_quadtree_performance PRIVATE GTest::gtest_main BVH2)
+
 include(GoogleTest)
 gtest_discover_tests(unit_test_radix_sort)
+gtest_discover_tests(unit_test_quadtree)
+gtest_discover_tests(unit_test_quadtree_performance)
