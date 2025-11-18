@@ -142,6 +142,13 @@ int main() {
     const auto& tree = octree.cornerstone();
     const auto& counts = octree.counts();
     const auto view = octree.view();
+
+    // Simple depth-first traversal over all nodes
+    cstone::traverseOctree(view, [](cstone::TreeNodeIndex idx, KeyType key, unsigned level) {
+        // idx: node index in view.prefixes, key: Morton/Hilbert key, level: tree depth
+        (void)idx; (void)key; (void)level;
+        return true; // return false to prune this subtree
+    });
     
     return 0;
 }
@@ -170,7 +177,13 @@ int main() {
     qt.build(keys.data(), keys.data()+keys.size(), ex);
 
     auto view = qt.view();
-    // view.prefixes, childOffsets, parents, levelRange, internalToLeaf, leafToInternal
+
+    // Simple depth-first traversal over all quadtree nodes
+    qtree2d::traverseQuadtree(view, [](TreeNodeIndex idx, KeyType key, unsigned level) {
+        (void)idx; (void)key; (void)level;
+        return true;
+    });
+
     return 0;
 }
 ```

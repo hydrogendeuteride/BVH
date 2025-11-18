@@ -185,6 +185,57 @@ namespace qtree2d
         std::vector<TreeNodeIndex> leafToInternal;
     };
 
+    template<typename KeyType, typename Func>
+    inline void traverseQuadtree(const QuadtreeView<KeyType> &view, Func &&visit)
+    {
+        if (view.numNodes == 0)
+        {
+            return;
+        }
+
+        using PackedKey = std::remove_cv_t<KeyType>;
+
+        std::vector<TreeNodeIndex> stack;
+        stack.reserve(64);
+        stack.push_back(0);
+
+        using VisitReturn = std::invoke_result_t<Func &, TreeNodeIndex, PackedKey, unsigned>;
+        constexpr bool returnsBool = std::is_same_v<VisitReturn, bool>;
+
+        while (!stack.empty())
+        {
+            TreeNodeIndex nodeIdx = stack.back();
+            stack.pop_back();
+
+            PackedKey packed = static_cast<PackedKey>(view.prefixes[nodeIdx]);
+            PackedKey key = decodePlaceholderBit2D<PackedKey>(packed);
+            unsigned level = decodePrefixLength2D<PackedKey>(packed) / 2;
+
+            if constexpr (returnsBool)
+            {
+                if (!visit(nodeIdx, key, level))
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                visit(nodeIdx, key, level);
+            }
+
+            TreeNodeIndex childStart = view.childOffsets[nodeIdx];
+            if (childStart == 0) continue;
+
+            for (int i = 3; i >= 0; --i)
+            {
+                TreeNodeIndex childIdx = childStart + i;
+                if (childIdx >= view.numNodes) continue;
+                if (view.parents[(childIdx - 1) / 4] != nodeIdx) continue;
+                stack.push_back(childIdx);
+            }
+        }
+    }
+
     template<typename KeyType>
     void buildLinkedTree(const KeyType *leaves,
                          QuadtreeView<KeyType> q,
@@ -268,4 +319,3 @@ namespace qtree2d
 }
 
 #endif // BVH2_QUADTREE_H
-

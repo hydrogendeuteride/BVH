@@ -238,3 +238,39 @@ TEST(Quadtree2D, EdgeSmall)
         EXPECT_GE(v.numNodes, 2);
     }
 }
+
+TEST(Quadtree2D, TraversalVisitsAllNodes)
+{
+    const size_t N = 512;
+    auto xy = generateRandom2D(N, 777);
+    std::vector<float> xs, ys;
+    splitXY(xy, xs, ys);
+
+    Box2D<float> box;
+    for (size_t i = 0; i < N; ++i) box.expand({xs[i], ys[i]});
+
+    std::vector<KeyType> keys(N);
+    tf::Executor ex(1);
+    computeSfcKeys2D<float, KeyType>(xs.data(), ys.data(), keys.data(), N, box, ex);
+    std::sort(keys.begin(), keys.end());
+
+    const unsigned bucketSize = 16;
+    qtree2d::Quadtree<KeyType> qt(bucketSize);
+    qt.build(keys.data(), keys.data() + keys.size(), ex);
+
+    auto view = qt.view();
+
+    std::vector<TreeNodeIndex> visited;
+    qtree2d::traverseQuadtree(view, [&](TreeNodeIndex idx, KeyType key, unsigned level) {
+        (void)key;
+        (void)level;
+        visited.push_back(idx);
+        return true;
+    });
+
+    ASSERT_EQ(static_cast<TreeNodeIndex>(visited.size()), view.numNodes);
+
+    std::sort(visited.begin(), visited.end());
+    visited.erase(std::unique(visited.begin(), visited.end()), visited.end());
+    EXPECT_EQ(static_cast<TreeNodeIndex>(visited.size()), view.numNodes);
+}

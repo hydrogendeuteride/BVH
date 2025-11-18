@@ -505,3 +505,29 @@ TEST(Octree, ParentContainsChildren)
     std::cout << "\n=== Tree Hierarchy Test ===" << std::endl;
     traverseOctree2(view.prefixes, view, centers, sizes);
 }
+
+TEST(Octree, TraversalVisitsAllNodes)
+{
+    constexpr unsigned bucketSize = 16;
+    std::vector<KeyType> codes = makeRandomCodes(256);
+
+    tf::Executor executor;
+    cstone::Octree<KeyType> oct(bucketSize);
+    oct.build(codes.data(), codes.data() + codes.size(), executor);
+
+    auto view = oct.view();
+
+    std::vector<TreeNodeIndex> visited;
+    cstone::traverseOctree(view, [&](TreeNodeIndex idx, KeyType key, unsigned level) {
+        (void)key;
+        (void)level;
+        visited.push_back(idx);
+        return true;
+    });
+
+    ASSERT_EQ(static_cast<TreeNodeIndex>(visited.size()), view.numNodes);
+
+    std::sort(visited.begin(), visited.end());
+    visited.erase(std::unique(visited.begin(), visited.end()), visited.end());
+    EXPECT_EQ(static_cast<TreeNodeIndex>(visited.size()), view.numNodes);
+}
