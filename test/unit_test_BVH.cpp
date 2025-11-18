@@ -315,3 +315,61 @@ TEST_F(BVHTest, AllPrimitivesAtSamePosition)
         std::cout << "Structure validation passed for identical primitives." << std::endl;
     }
 }
+
+TEST_F(BVHTest, RayTraversalMissesBVH)
+{
+    std::vector<Primitive> primitives(1);
+    primitives[0].bounds.min[0] = primitives[0].bounds.min[1] = primitives[0].bounds.min[2] = 0.0f;
+    primitives[0].bounds.max[0] = primitives[0].bounds.max[1] = primitives[0].bounds.max[2] = 1.0f;
+
+    tf::Executor executor{ std::thread::hardware_concurrency() };
+    auto nodes = buildLBVH(executor, primitives);
+
+    Ray ray(Vec3<float>(2.0f, 2.0f, 2.0f), Vec3<float>(1.0f, 0.0f, 0.0f));
+
+    uint32_t hitIndex = 0;
+    float hitT = 0.0f;
+    bool hit = traverseBVHClosestHit(nodes, primitives, ray, hitIndex, hitT);
+
+    EXPECT_FALSE(hit);
+}
+
+TEST_F(BVHTest, RayTraversalFindsClosestPrimitive)
+{
+    std::vector<Primitive> primitives(2);
+
+    // First primitive at [0,1]^3
+    primitives[0].bounds.min[0] = primitives[0].bounds.min[1] = primitives[0].bounds.min[2] = 0.0f;
+    primitives[0].bounds.max[0] = primitives[0].bounds.max[1] = primitives[0].bounds.max[2] = 1.0f;
+
+    // Second primitive at [2,3]^3
+    primitives[1].bounds.min[0] = primitives[1].bounds.min[1] = primitives[1].bounds.min[2] = 2.0f;
+    primitives[1].bounds.max[0] = primitives[1].bounds.max[1] = primitives[1].bounds.max[2] = 3.0f;
+
+    tf::Executor executor{ std::thread::hardware_concurrency() };
+    auto nodes = buildLBVH(executor, primitives);
+
+    Ray ray(Vec3<float>(-1.0f, 0.5f, 0.5f), Vec3<float>(1.0f, 0.0f, 0.0f));
+
+    uint32_t hitIndex = 0;
+    float hitT = 0.0f;
+    bool hit = traverseBVHClosestHit(nodes, primitives, ray, hitIndex, hitT);
+
+    EXPECT_TRUE(hit);
+    EXPECT_EQ(hitIndex, 0u);
+    EXPECT_GT(hitT, 0.0f);
+}
+
+TEST_F(BVHTest, BuildLBVHWithDifferentSortMethods)
+{
+    auto primitives = generateRandomPrimitives(128);
+
+    tf::Executor executor{ std::thread::hardware_concurrency() };
+
+    auto nodesStd = buildLBVH<uint64_t>(executor, primitives, MortonSortMethod::StdSort);
+    auto nodesRadix = buildLBVH<uint64_t>(executor, primitives, MortonSortMethod::RadixSort);
+
+    EXPECT_EQ(nodesStd.size(), nodesRadix.size());
+    EXPECT_TRUE(validateBVHStructure(nodesStd));
+    EXPECT_TRUE(validateBVHStructure(nodesRadix));
+}

@@ -39,13 +39,16 @@ inline T expandBits(uint32_t v)
     return result;
 }
 
-template<typename MortonCodeType>
-inline MortonCodeType computeMortonCode(const float pos[3], const float sceneMin[3], const float sceneExtent[3])
+template<typename MortonCodeType, typename Real>
+inline MortonCodeType computeMortonCode(const Real pos[3], const Real sceneMin[3], const Real sceneExtent[3])
 {
-    float normalized[3];
+    Real normalized[3];
     for (int i = 0; i < 3; ++i)
     {
-        normalized[i] = std::min(std::max((pos[i] - sceneMin[i]) / sceneExtent[i], 0.0f), 1.0f);
+        Real v = (pos[i] - sceneMin[i]) / sceneExtent[i];
+        if (v < Real(0)) v = Real(0);
+        if (v > Real(1)) v = Real(1);
+        normalized[i] = v;
     }
 
     constexpr uint32_t maxCoordValue = (sizeof(MortonCodeType) <= 4) ? 1023 : 2097151;

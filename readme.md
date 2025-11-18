@@ -60,9 +60,50 @@ int main() {
     // Add more primitives...
     
     tf::Executor executor{std::thread::hardware_concurrency()};
+
+    // Choose sort method for Morton codes (StdSort or RadixSort)
+    std::vector<BVHNode> bvh =
+        buildLBVH<uint64_t>(executor, primitives, MortonSortMethod::RadixSort);
+
+    // Simple closest-hit ray traversal
+    Ray ray(Vec3<float>(-1.0f, 0.5f, 0.5f), Vec3<float>(1.0f, 0.0f, 0.0f));
+    uint32_t hitIndex;
+    float hitT;
+    if (traverseBVHClosestHit(bvh, primitives, ray, hitIndex, hitT)) {
+        // hitIndex is the index of the closest intersected primitive
+    }
     
-    std::vector<BVHNode> bvh = buildLBVH<uint64_t>(executor, primitives);
-    
+    return 0;
+}
+```
+
+Double precision BVH
+```c++
+#include "bvh/BVH.h"
+#include <vector>
+
+int main() {
+    std::vector<PrimitiveD> primitives;
+
+    PrimitiveD box;
+    double pmin[3] = {0.0, 0.0, 0.0};
+    double pmax[3] = {1.0, 1.0, 1.0};
+    box.bounds.expand(pmin);
+    box.bounds.expand(pmax);
+    primitives.push_back(box);
+
+    tf::Executor executor{std::thread::hardware_concurrency()};
+
+    // BVH over double-precision bounds
+    std::vector<BVHNodeD> bvh = buildLBVH<uint64_t>(executor, primitives);
+
+    RayD ray(Vec3<double>(-1.0, 0.5, 0.5), Vec3<double>(1.0, 0.0, 0.0));
+    uint32_t hitIndex;
+    double hitT;
+    if (traverseBVHClosestHit(bvh, primitives, ray, hitIndex, hitT)) {
+        // hitIndex is the closest hit in double precision
+    }
+
     return 0;
 }
 ```
@@ -135,7 +176,7 @@ int main() {
 ```
 
 ## Performance
-System: AMD Ryzen 7 6800HS 8 core CPU, 32GB RAM
+System: AMD Ryzen 7 6800HS 8 core CPU, 32GB RAM, float32
 
 |Structure| Input Number   | Build time (ms) | # Threads |
 |--------|----------------|-----------------|-----------|
