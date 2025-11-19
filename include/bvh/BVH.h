@@ -6,6 +6,7 @@
 #include "util/ParallelRadixSort.h"
 #include "util/Bitops.h"
 #include "util/ray.h"
+#include "util/Triangle.h"
 #include <taskflow/taskflow.hpp>
 #include <taskflow/algorithm/for_each.hpp>
 #include <vector>
@@ -14,10 +15,7 @@
 #include <type_traits>
 
 template<typename Scalar>
-struct PrimitiveT
-{
-    Box<Scalar> bounds;
-};
+using PrimitiveT = TriangleT<Scalar>;
 
 using Primitive = PrimitiveT<float>;
 using PrimitiveF = PrimitiveT<float>;
@@ -448,12 +446,12 @@ inline bool traverseBVHClosestHit(const std::vector<BVHNodeT<Scalar>> &nodes,
                 continue;
             }
 
-            Scalar primNear, primFar;
-            if (intersectRayAABB<Scalar>(ray, primitives[primIdx].bounds, ray.tmin, closestT, primNear, primFar))
+            Scalar tHit;
+            if (intersectRayPrimitive<Scalar>(ray, primitives[primIdx], ray.tmin, closestT, tHit))
             {
-                if (primNear < closestT)
+                if (tHit < closestT)
                 {
-                    closestT = primNear;
+                    closestT = tHit;
                     closestIdx = primIdx;
                     hit = true;
                 }

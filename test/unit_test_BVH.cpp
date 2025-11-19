@@ -322,6 +322,12 @@ TEST_F(BVHTest, RayTraversalMissesBVH)
     primitives[0].bounds.min[0] = primitives[0].bounds.min[1] = primitives[0].bounds.min[2] = 0.0f;
     primitives[0].bounds.max[0] = primitives[0].bounds.max[1] = primitives[0].bounds.max[2] = 1.0f;
 
+    // Define a triangle on one face of the box (not actually hit in this test).
+    primitives[0].v0 = Vec3<float>(0.0f, 0.0f, 0.0f);
+    primitives[0].v1 = Vec3<float>(0.0f, 1.0f, 0.0f);
+    primitives[0].v2 = Vec3<float>(0.0f, 0.0f, 1.0f);
+    primitives[0].updateBounds();
+
     tf::Executor executor{ std::thread::hardware_concurrency() };
     auto nodes = buildLBVH(executor, primitives);
 
@@ -342,9 +348,21 @@ TEST_F(BVHTest, RayTraversalFindsClosestPrimitive)
     primitives[0].bounds.min[0] = primitives[0].bounds.min[1] = primitives[0].bounds.min[2] = 0.0f;
     primitives[0].bounds.max[0] = primitives[0].bounds.max[1] = primitives[0].bounds.max[2] = 1.0f;
 
+    // Triangle on the front face x = 0 so the ray hits at t = 1.
+    primitives[0].v0 = Vec3<float>(0.0f, 0.0f, 0.0f);
+    primitives[0].v1 = Vec3<float>(0.0f, 1.0f, 0.0f);
+    primitives[0].v2 = Vec3<float>(0.0f, 0.0f, 1.0f);
+    primitives[0].updateBounds();
+
     // Second primitive at [2,3]^3
     primitives[1].bounds.min[0] = primitives[1].bounds.min[1] = primitives[1].bounds.min[2] = 2.0f;
     primitives[1].bounds.max[0] = primitives[1].bounds.max[1] = primitives[1].bounds.max[2] = 3.0f;
+
+    // Triangle on the front face x = 2 so the ray hits later (t = 3).
+    primitives[1].v0 = Vec3<float>(2.0f, 0.0f, 0.0f);
+    primitives[1].v1 = Vec3<float>(2.0f, 1.0f, 0.0f);
+    primitives[1].v2 = Vec3<float>(2.0f, 0.0f, 1.0f);
+    primitives[1].updateBounds();
 
     tf::Executor executor{ std::thread::hardware_concurrency() };
     auto nodes = buildLBVH(executor, primitives);

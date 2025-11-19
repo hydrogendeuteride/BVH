@@ -45,16 +45,14 @@ LBVH
 #include <vector>
 
 int main() {
-    // Create a vector of primitives (e.g., triangles)
+    // Create a vector of triangle primitives
     std::vector<Primitive> primitives;
     
     Primitive triangle;
-    float v1[3] = {0.0f, 0.0f, 0.0f};
-    float v2[3] = {1.0f, 0.0f, 0.0f};
-    float v3[3] = {0.0f, 1.0f, 0.0f};
-    triangle.bounds.expand(v1);
-    triangle.bounds.expand(v2);
-    triangle.bounds.expand(v3);
+    triangle.v0 = Vec3<float>(0.0f, 0.0f, 0.0f);
+    triangle.v1 = Vec3<float>(1.0f, 0.0f, 0.0f);
+    triangle.v2 = Vec3<float>(0.0f, 1.0f, 0.0f);
+    triangle.updateBounds(); // compute AABB from triangle vertices
     primitives.push_back(triangle);
     
     // Add more primitives...
@@ -85,16 +83,17 @@ Double precision BVH
 int main() {
     std::vector<PrimitiveD> primitives;
 
-    PrimitiveD box;
-    double pmin[3] = {0.0, 0.0, 0.0};
-    double pmax[3] = {1.0, 1.0, 1.0};
-    box.bounds.expand(pmin);
-    box.bounds.expand(pmax);
-    primitives.push_back(box);
+    // One triangle in double precision
+    PrimitiveD tri;
+    tri.v0 = Vec3<double>(0.0, 0.0, 0.0);
+    tri.v1 = Vec3<double>(1.0, 0.0, 0.0);
+    tri.v2 = Vec3<double>(0.0, 1.0, 0.0);
+    tri.updateBounds();
+    primitives.push_back(tri);
 
     tf::Executor executor{std::thread::hardware_concurrency()};
 
-    // BVH over double-precision bounds
+    // BVH over double-precision triangles
     std::vector<BVHNodeD> bvh = buildLBVH<uint64_t>(executor, primitives);
 
     RayD ray(Vec3<double>(-1.0, 0.5, 0.5), Vec3<double>(1.0, 0.0, 0.0));
