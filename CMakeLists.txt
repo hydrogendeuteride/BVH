@@ -16,12 +16,43 @@ target_include_directories(BVH2 INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+set(BVH2_TASKFLOW_RESOLVED_INCLUDE_DIR "")
+
 if(BVH2_TASKFLOW_INCLUDE_DIR)
-    target_include_directories(BVH2 INTERFACE "${BVH2_TASKFLOW_INCLUDE_DIR}")
-elseif(BVH2_USE_LOCAL_TASKFLOW)
-    target_include_directories(BVH2 INTERFACE
-            ${CMAKE_CURRENT_SOURCE_DIR}/taskflow
-    )
+    if(EXISTS "${BVH2_TASKFLOW_INCLUDE_DIR}/taskflow/taskflow.hpp")
+        set(BVH2_TASKFLOW_RESOLVED_INCLUDE_DIR "${BVH2_TASKFLOW_INCLUDE_DIR}")
+    elseif(EXISTS "${BVH2_TASKFLOW_INCLUDE_DIR}/taskflow.hpp")
+        get_filename_component(BVH2_TASKFLOW_INCLUDE_PARENT "${BVH2_TASKFLOW_INCLUDE_DIR}" DIRECTORY)
+        if(EXISTS "${BVH2_TASKFLOW_INCLUDE_PARENT}/taskflow/taskflow.hpp")
+            set(BVH2_TASKFLOW_RESOLVED_INCLUDE_DIR "${BVH2_TASKFLOW_INCLUDE_PARENT}")
+        else()
+            message(FATAL_ERROR
+                    "BVH2_TASKFLOW_INCLUDE_DIR='${BVH2_TASKFLOW_INCLUDE_DIR}' is not compatible with <taskflow/taskflow.hpp> includes.")
+        endif()
+    else()
+        message(FATAL_ERROR
+                "BVH2_TASKFLOW_INCLUDE_DIR='${BVH2_TASKFLOW_INCLUDE_DIR}' does not contain taskflow headers.")
+    endif()
+endif()
+
+if(NOT BVH2_TASKFLOW_RESOLVED_INCLUDE_DIR AND BVH2_USE_LOCAL_TASKFLOW)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/taskflow/taskflow/taskflow.hpp")
+        set(BVH2_TASKFLOW_RESOLVED_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/taskflow")
+    endif()
+endif()
+
+if(NOT BVH2_TASKFLOW_RESOLVED_INCLUDE_DIR)
+    find_path(BVH2_TASKFLOW_SYSTEM_INCLUDE_DIR taskflow/taskflow.hpp)
+    if(BVH2_TASKFLOW_SYSTEM_INCLUDE_DIR)
+        set(BVH2_TASKFLOW_RESOLVED_INCLUDE_DIR "${BVH2_TASKFLOW_SYSTEM_INCLUDE_DIR}")
+    endif()
+endif()
+
+if(BVH2_TASKFLOW_RESOLVED_INCLUDE_DIR)
+    target_include_directories(BVH2 INTERFACE "${BVH2_TASKFLOW_RESOLVED_INCLUDE_DIR}")
+else()
+    message(FATAL_ERROR
+            "Taskflow headers were not found. Set BVH2_TASKFLOW_INCLUDE_DIR or enable BVH2_USE_LOCAL_TASKFLOW.")
 endif()
 
 # Warnings and optional CPU features

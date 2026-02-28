@@ -25,7 +25,7 @@ namespace cstone
         TreeNodeIndex ret = 0;
         for (unsigned l = 1; l <= level + 1; ++l)
         {
-            unsigned digit = octalDigit(key, l);
+            unsigned digit = bvh2::octalDigit(key, l);
             ret += digitWeight(digit);
         }
         return ret;
@@ -47,16 +47,16 @@ namespace cstone
         flow.for_each_index(TreeNodeIndex(0), numLeafNodes, TreeNodeIndex(1),
                             [&](TreeNodeIndex tid) {
                                 KeyType key = leaves[tid];
-                                unsigned level = treeLevel(leaves[tid + 1] - key);
+                                unsigned level = bvh2::treeLevel(leaves[tid + 1] - key);
 
-                                prefixes[tid + numInternalNodes] = encodePlaceholderBit(key, 3 * level);
+                                prefixes[tid + numInternalNodes] = bvh2::encodePlaceholderBit(key, 3 * level);
                                 internalToLeaf[tid + numInternalNodes] = tid + numInternalNodes;
 
-                                unsigned prefixLength = commonPrefix(key, leaves[tid + 1]);
+                                unsigned prefixLength = bvh2::commonPrefix(key, leaves[tid + 1]);
                                 if (prefixLength % 3 == 0 && tid < numLeafNodes - 1)
                                 {
                                     TreeNodeIndex octIndex = (tid + binaryKeyWeight(key, prefixLength / 3)) / 7;
-                                    prefixes[octIndex] = encodePlaceholderBit(key, prefixLength);
+                                    prefixes[octIndex] = bvh2::encodePlaceholderBit(key, prefixLength);
                                     internalToLeaf[octIndex] = octIndex;
                                 }
                             });
@@ -80,11 +80,11 @@ namespace cstone
                             [&](TreeNodeIndex i) {
                                 TreeNodeIndex idxA = leafToInternal[i];
                                 KeyType prefix = prefixes[idxA];
-                                KeyType nodeKey = decodePlaceholderBit(prefix);
-                                unsigned prefixLength = decodePrefixLength(prefix);
+                                KeyType nodeKey = bvh2::decodePlaceholderBit(prefix);
+                                unsigned prefixLength = bvh2::decodePrefixLength(prefix);
                                 unsigned level = prefixLength / 3;
 
-                                KeyType childPrefix = encodePlaceholderBit(nodeKey, prefixLength + 3);
+                                KeyType childPrefix = bvh2::encodePlaceholderBit(nodeKey, prefixLength + 3);
                                 TreeNodeIndex leafSearchStart = levelRange[level + 1];
                                 TreeNodeIndex leafSearchEnd = levelRange[level + 2];
 
@@ -106,12 +106,13 @@ namespace cstone
     template<typename KeyType>
     void getLevelRangeCpu(const KeyType *nodeKeys, TreeNodeIndex numNodes, TreeNodeIndex *levelRange)
     {
-        for (unsigned level = 0; level <= maxTreeLevel<KeyType>(); ++level)
+        for (unsigned level = 0; level <= bvh2::maxTreeLevel<KeyType>(); ++level)
         {
-            auto it = std::lower_bound(nodeKeys, nodeKeys + numNodes, encodePlaceholderBit(KeyType(0), 3 * level));
+            auto it = std::lower_bound(nodeKeys, nodeKeys + numNodes,
+                                       bvh2::encodePlaceholderBit(KeyType(0), 3 * level));
             levelRange[level] = TreeNodeIndex(it - nodeKeys);
         }
-        levelRange[maxTreeLevel<KeyType>() + 1] = numNodes;
+        levelRange[bvh2::maxTreeLevel<KeyType>() + 1] = numNodes;
     }
 
     template<typename KeyType>
@@ -229,8 +230,8 @@ namespace cstone
             stack.pop_back();
 
             PackedKey packed = static_cast<PackedKey>(view.prefixes[nodeIdx]);
-            PackedKey key = decodePlaceholderBit<PackedKey>(packed);
-            unsigned level = decodePrefixLength<PackedKey>(packed) / 3;
+            PackedKey key = bvh2::decodePlaceholderBit<PackedKey>(packed);
+            unsigned level = bvh2::decodePrefixLength<PackedKey>(packed) / 3;
 
             if constexpr (returnsBool)
             {
@@ -287,7 +288,7 @@ namespace cstone
             TreeNodeIndex parentSize = std::max(1, (numNodes - 1) / 8);
             parents.resize(parentSize);
 
-            levelRange.resize(maxTreeLevel<KeyType>() + 2);
+            levelRange.resize(bvh2::maxTreeLevel<KeyType>() + 2);
         }
 
         OctreeView<KeyType> data()
@@ -346,8 +347,8 @@ namespace cstone
         flow.for_each_index(std::size_t(0), std::size_t(numNodes), std::size_t(1),
                             [&](std::size_t i) {
                                 KeyType prefix = prefixes[i];
-                                KeyType startKey = decodePlaceholderBit(prefix);
-                                unsigned level = decodePrefixLength(prefix) / 3;
+                                KeyType startKey = bvh2::decodePlaceholderBit(prefix);
+                                unsigned level = bvh2::decodePrefixLength(prefix) / 3;
 
                                 auto nodeBox = hilbertIBox(startKey, level);
                                 std::tie(centers[i], sizes[i]) = centerAndSize(nodeBox, box);

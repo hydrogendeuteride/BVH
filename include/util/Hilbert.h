@@ -19,13 +19,13 @@ template<typename KeyType>
 constexpr inline std::enable_if_t<std::is_unsigned_v<KeyType>, KeyType>
 iHilbert(unsigned px, unsigned py, unsigned pz) noexcept
 {
-    assert(px < (1u << maxTreeLevel<KeyType>()));
-    assert(py < (1u << maxTreeLevel<KeyType>()));
-    assert(pz < (1u << maxTreeLevel<KeyType>()));
+    assert(px < (1u << bvh2::maxTreeLevel<KeyType>()));
+    assert(py < (1u << bvh2::maxTreeLevel<KeyType>()));
+    assert(pz < (1u << bvh2::maxTreeLevel<KeyType>()));
 
     KeyType key = 0;
 
-    for (int level = maxTreeLevel<KeyType>() - 1; level >= 0; --level)
+    for (int level = bvh2::maxTreeLevel<KeyType>() - 1; level >= 0; --level)
     {
         unsigned xi = (px >> level) & 1u;
         unsigned yi = (py >> level) & 1u;
@@ -63,7 +63,7 @@ inline std::tuple<unsigned, unsigned, unsigned> decodeHilbert(KeyType key) noexc
     unsigned py = 0;
     unsigned pz = 0;
 
-    for (unsigned level = 0; level < maxTreeLevel<KeyType>(); ++level)
+    for (unsigned level = 0; level < bvh2::maxTreeLevel<KeyType>(); ++level)
     {
         unsigned octant = (key >> (3 * level)) & 7u;
         const unsigned xi = octant >> 2u;
@@ -101,7 +101,7 @@ template<typename KeyType>
 IBox<KeyType> hilbertIBox(KeyType keyStart, unsigned level) noexcept
 {
 //    assert(level <= maxTreeLevel<KeyType>());
-    constexpr unsigned maxCoord = 1u << maxTreeLevel<KeyType>();
+    constexpr unsigned maxCoord = 1u << bvh2::maxTreeLevel<KeyType>();
     unsigned cubeLength = maxCoord >> level;
     unsigned mask = ~(cubeLength - 1);
 
@@ -120,7 +120,7 @@ IBox<KeyType> hilbertIBox(KeyType keyStart, unsigned level) noexcept
 template<typename KeyType, typename T>
 inline KeyType hilbert3D(T x, T y, T z, T xmin, T ymin, T zmin, T mx, T my, T mz)
 {
-    constexpr int mcoord = (1u << maxTreeLevel<KeyType>()) - 1;
+    constexpr int mcoord = (1u << bvh2::maxTreeLevel<KeyType>()) - 1;
 
     int ix = std::floor(x * mx) - xmin * mx;
     int iy = std::floor(y * my) - ymin * my;
@@ -140,7 +140,7 @@ inline KeyType hilbert3D(T x, T y, T z, T xmin, T ymin, T zmin, T mx, T my, T mz
 template<typename KeyType, typename T>
 inline KeyType hilbert3D(T x, T y, T z, const Box<T> &box)
 {
-    constexpr unsigned cubeLength = (1u << maxTreeLevel<KeyType>());
+    constexpr unsigned cubeLength = (1u << bvh2::maxTreeLevel<KeyType>());
 
     return hilbert3D<KeyType>(x, y, z, box.xmin(), box.ymin(), box.zmin(), cubeLength * box.ilx(),
                               cubeLength * box.ily(), cubeLength * box.ilz());

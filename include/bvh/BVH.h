@@ -11,8 +11,12 @@
 #include <taskflow/algorithm/for_each.hpp>
 #include <vector>
 #include <algorithm>
-#include <atomic>
+#include <limits>
 #include <type_traits>
+#include <utility>
+
+namespace bvh2
+{
 
 template<typename Scalar>
 using PrimitiveT = TriangleT<Scalar>;
@@ -42,26 +46,92 @@ enum class MortonSortMethod
     RadixSort
 };
 
+namespace detail
+{
+
+template<typename MortonCodeType>
+inline int commonPrefixWithTieBreak(const std::vector<MortonPrimitive<MortonCodeType>> &mortonPrimitives,
+                                    uint32_t first,
+                                    uint32_t second)
+{
+    const MortonPrimitive<MortonCodeType> &a = mortonPrimitives[first];
+    const MortonPrimitive<MortonCodeType> &b = mortonPrimitives[second];
+
+    const MortonCodeType codeXor = a.mortonCode ^ b.mortonCode;
+    if (codeXor != 0)
+    {
+        return countLeadingZeros(codeXor);
+    }
+
+    const uint32_t primitiveXor = a.primitiveIndex ^ b.primitiveIndex;
+    return std::numeric_limits<MortonCodeType>::digits + countLeadingZeros(primitiveXor);
+}
+
+template<typename Scalar>
+inline void mergeChildBounds(BVHNodeT<Scalar> &parentNode,
+                             const BVHNodeT<Scalar> &leftChild,
+                             const BVHNodeT<Scalar> &rightChild)
+{
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        parentNode.bounds.min[axis] = std::min(leftChild.bounds.min[axis], rightChild.bounds.min[axis]);
+        parentNode.bounds.max[axis] = std::max(leftChild.bounds.max[axis], rightChild.bounds.max[axis]);
+    }
+}
+
+template<typename Scalar>
+inline void computeBoundsPostOrder(std::vector<BVHNodeT<Scalar>> &nodes, uint32_t numInternalNodes)
+{
+    if (numInternalNodes == 0 || nodes.empty())
+    {
+        return;
+    }
+
+    std::vector<std::pair<uint32_t, bool>> stack;
+    stack.reserve(numInternalNodes * 2);
+    stack.emplace_back(0u, false);
+
+    while (!stack.empty())
+    {
+        auto [nodeIdx, visited] = stack.back();
+        stack.pop_back();
+
+        if (nodeIdx >= numInternalNodes)
+        {
+            continue;
+        }
+
+        BVHNodeT<Scalar> &node = nodes[nodeIdx];
+        if (!visited)
+        {
+            stack.emplace_back(nodeIdx, true);
+            stack.emplace_back(node.right_idx, false);
+            stack.emplace_back(node.left_idx, false);
+            continue;
+        }
+
+        const BVHNodeT<Scalar> &leftChild = nodes[node.left_idx];
+        const BVHNodeT<Scalar> &rightChild = nodes[node.right_idx];
+        mergeChildBounds(node, leftChild, rightChild);
+    }
+}
+
+} // namespace detail
+
 template<typename MortonCodeType>
 inline uint32_t
 findSplit(const std::vector<MortonPrimitive<MortonCodeType>> &mortonPrimitives, const uint32_t numPrimitives,
           uint32_t first,
           uint32_t last)
 {
+    (void)numPrimitives;
+
     if (first == last)
     {
         return first;
     }
 
-    MortonCodeType firstCode = mortonPrimitives[first].mortonCode;
-    MortonCodeType lastCode = mortonPrimitives[last].mortonCode;
-
-    if (firstCode == lastCode)
-    {
-        return (first + last) >> 1;
-    }
-
-    uint32_t commonPrefix = countLeadingZeros(firstCode ^ lastCode);
+    const uint32_t commonPrefix = detail::commonPrefixWithTieBreak(mortonPrimitives, first, last);
 
     uint32_t split = first;
     uint32_t step = last - first;
@@ -73,8 +143,7 @@ findSplit(const std::vector<MortonPrimitive<MortonCodeType>> &mortonPrimitives, 
 
         if (newSplit < last)
         {
-            MortonCodeType splitCode = mortonPrimitives[newSplit].mortonCode;
-            uint32_t splitPrefix = countLeadingZeros(firstCode ^ splitCode);
+            const uint32_t splitPrefix = detail::commonPrefixWithTieBreak(mortonPrimitives, first, newSplit);
 
             if (splitPrefix > commonPrefix)
             {
@@ -93,9 +162,19 @@ struct PrimitiveRange
 };
 
 template<typename MortonCodeType>
-inline int commonUpperBits(MortonCodeType a, MortonCodeType b)
+inline int commonUpperBits(const std::vector<MortonPrimitive<MortonCodeType>> &mortonPrimitives,
+                           int first,
+                           int second)
 {
-    return countLeadingZeros(a ^ b);
+    if (second < 0 || second >= static_cast<int>(mortonPrimitives.size()))
+    {
+        return -1;
+    }
+
+    return detail::commonPrefixWithTieBreak(
+            mortonPrimitives,
+            static_cast<uint32_t>(first),
+            static_cast<uint32_t>(second));
 }
 
 template<typename MortonCodeType>
@@ -108,47 +187,32 @@ determineRange(uint32_t idx, uint32_t numPrimitives,
         return {0, numPrimitives - 1};
     }
 
-    MortonCodeType mortonCode = mortonPrimitives[idx].mortonCode;
+    const int index = static_cast<int>(idx);
+    const int L_delta = (idx > 0) ? commonUpperBits(mortonPrimitives, index, index - 1) : -1;
 
-    const int L_delta = (idx > 0) ? commonUpperBits(mortonCode, mortonPrimitives[idx - 1].mortonCode) : -1;
-
-    const int R_delta = (idx < numPrimitives - 1) ? commonUpperBits(mortonCode, mortonPrimitives[idx + 1].mortonCode)
-                                                  : -1;
+    const int R_delta = (idx < numPrimitives - 1) ? commonUpperBits(mortonPrimitives, index, index + 1) : -1;
 
     const int d = (R_delta > L_delta) ? 1 : -1;
 
     const int delta_min = std::min(L_delta, R_delta);
     int l_max = 2;
     int delta = -1;
-    int i_tmp = idx + d * l_max;
-
-    if (0 <= i_tmp && i_tmp < static_cast<int>(numPrimitives))
-    {
-        delta = commonUpperBits(mortonCode, mortonPrimitives[i_tmp].mortonCode);
-    }
+    int i_tmp = index + d * l_max;
+    delta = commonUpperBits(mortonPrimitives, index, i_tmp);
 
     while (delta > delta_min)
     {
         l_max <<= 1;
-        i_tmp = idx + d * l_max;
-        delta = -1;
-
-        if (0 <= i_tmp && i_tmp < static_cast<int>(numPrimitives))
-        {
-            delta = commonUpperBits(mortonCode, mortonPrimitives[i_tmp].mortonCode);
-        }
+        i_tmp = index + d * l_max;
+        delta = commonUpperBits(mortonPrimitives, index, i_tmp);
     }
 
     int l = 0;
     int t = l_max >> 1;
     while (t > 0)
     {
-        i_tmp = idx + (l + t) * d;
-        delta = -1;
-        if (0 <= i_tmp && i_tmp < static_cast<int>(numPrimitives))
-        {
-            delta = commonUpperBits(mortonCode, mortonPrimitives[i_tmp].mortonCode);
-        }
+        i_tmp = index + (l + t) * d;
+        delta = commonUpperBits(mortonPrimitives, index, i_tmp);
         if (delta > delta_min)
         {
             l += t;
@@ -156,13 +220,15 @@ determineRange(uint32_t idx, uint32_t numPrimitives,
         t >>= 1;
     }
 
-    unsigned int jdx = idx + l * d;
+    int jdx = index + l * d;
+    uint32_t first = static_cast<uint32_t>(index);
+    uint32_t second = static_cast<uint32_t>(jdx);
     if (d < 0)
     {
-        std::swap(idx, jdx);
+        std::swap(first, second);
     }
 
-    return {idx, jdx};
+    return {first, second};
 }
 
 template<typename MortonCodeType>
@@ -178,7 +244,12 @@ inline void sortMortonPrimitives(std::vector<MortonPrimitive<MortonCodeType>> &m
     {
         std::sort(mortonPrimitives.begin(), mortonPrimitives.end(),
                   [](const MortonPrimitive<MortonCodeType> &a, const MortonPrimitive<MortonCodeType> &b) {
-                      return a.mortonCode < b.mortonCode;
+                      if (a.mortonCode != b.mortonCode)
+                      {
+                          return a.mortonCode < b.mortonCode;
+                      }
+
+                      return a.primitiveIndex < b.primitiveIndex;
                   });
     }
 }
@@ -281,53 +352,8 @@ buildBVH(tf::Executor &executor, const std::vector<PrimitiveT<Scalar>> &primitiv
         node.bounds = primitives[pIdx].bounds;
     });
 
-    //-------------------------------------------------------------------------------------------------------------
     auto taskBounds = tf.emplace([&]() {
-        std::vector<std::atomic<int>> flags(numInternalNodes);
-        for (uint32_t i = 0; i < numInternalNodes; ++i) flags[i].store(0);
-
-        for (uint32_t idx = numInternalNodes; idx < totalNodes; ++idx)
-        {
-            uint32_t parent = nodes[idx].parent_idx;
-
-            while (parent != 0 || flags[0].load() != 0)
-            {
-                int expected = 0;
-                bool first = flags[parent].compare_exchange_strong(expected, 1);
-
-                if (first)
-                {
-                    break;
-                }
-                else
-                {
-                    BVHNodeT<Scalar> &parentNode = nodes[parent];
-                    BVHNodeT<Scalar> &leftChild = nodes[parentNode.left_idx];
-                    BVHNodeT<Scalar> &rightChild = nodes[parentNode.right_idx];
-
-                    for (int j = 0; j < 3; ++j)
-                    {
-                        parentNode.bounds.min[j] = std::min(leftChild.bounds.min[j], rightChild.bounds.min[j]);
-                        parentNode.bounds.max[j] = std::max(leftChild.bounds.max[j], rightChild.bounds.max[j]);
-                    }
-
-                    parent = parentNode.parent_idx;
-                }
-            }
-        }
-
-        if (numInternalNodes > 0 && flags[0].load() == 0)
-        {
-            BVHNodeT<Scalar> &rootNode = nodes[0];
-            BVHNodeT<Scalar> &leftChild = nodes[rootNode.left_idx];
-            BVHNodeT<Scalar> &rightChild = nodes[rootNode.right_idx];
-
-            for (int j = 0; j < 3; ++j)
-            {
-                rootNode.bounds.min[j] = std::min(leftChild.bounds.min[j], rightChild.bounds.min[j]);
-                rootNode.bounds.max[j] = std::max(leftChild.bounds.max[j], rightChild.bounds.max[j]);
-            }
-        }
+        detail::computeBoundsPostOrder(nodes, numInternalNodes);
     });
 
     taskInit.precede(taskInternal, taskLeaf);
@@ -499,5 +525,7 @@ inline bool traverseBVHClosestHit(const std::vector<BVHNodeT<Scalar>> &nodes,
 
     return hit;
 }
+
+} // namespace bvh2
 
 #endif //BVH2_BVH_H

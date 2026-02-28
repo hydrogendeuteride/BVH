@@ -4,6 +4,9 @@
 #include <cstdint>
 #include <algorithm>
 
+namespace bvh2
+{
+
 template<typename MortonCodeType>
 struct MortonPrimitive
 {
@@ -64,5 +67,7 @@ inline uint64_t expandBits(uint32_t v)
 {
     return expandBits<uint64_t>(v);
 }
+
+} // namespace bvh2
 
 #endif //BVH2_MORTONCODE_H

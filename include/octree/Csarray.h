@@ -63,14 +63,14 @@ namespace cstone
     {
         KeyType thisNode = csTree[nodeIdx];
         KeyType range = csTree[nodeIdx + 1] - thisNode;
-        unsigned level = treeLevel<KeyType>(range);
+        unsigned level = bvh2::treeLevel<KeyType>(range);
 
         if (level == 0)
         { return {-1, level}; }
 
-        int siblingIdx = octalDigit<KeyType>(thisNode, level);
+        int siblingIdx = bvh2::octalDigit<KeyType>(thisNode, level);
         bool siblings = (csTree[nodeIdx - siblingIdx + 8] ==
-                         csTree[nodeIdx - siblingIdx] + nodeRange<KeyType>(level - 1));
+                         csTree[nodeIdx - siblingIdx] + bvh2::nodeRange<KeyType>(level - 1));
         if (!siblings)
         { siblingIdx = -1; }
 
@@ -94,7 +94,7 @@ namespace cstone
             { return 0; }
         }
 
-        if (counts[nodeIdx] > bucketSize && level < maxTreeLevel<KeyType>())
+        if (counts[nodeIdx] > bucketSize && level < bvh2::maxTreeLevel<KeyType>())
         { return 8; }
 
         return 1;
@@ -143,7 +143,7 @@ namespace cstone
     {
         KeyType thisNode = oldTree[nodeIndex];
         KeyType range = oldTree[nodeIndex + 1] - thisNode;
-        unsigned level = treeLevel<KeyType>(range);
+        unsigned level = bvh2::treeLevel<KeyType>(range);
 
         TreeNodeIndex opCode = nodeOps[nodeIndex + 1] - nodeOps[nodeIndex];
         TreeNodeIndex newNodeIndex = nodeOps[nodeIndex];
@@ -154,7 +154,7 @@ namespace cstone
         {
             for (int sibling = 0; sibling < 8; ++sibling)
             {
-                newTree[newNodeIndex + sibling] = thisNode + sibling * nodeRange<KeyType>(level + 1);
+                newTree[newNodeIndex + sibling] = thisNode + sibling * bvh2::nodeRange<KeyType>(level + 1);
             }
         }
     }
@@ -218,7 +218,7 @@ namespace cstone
                   tf::Executor&  executor,
                   unsigned maxCount = std::numeric_limits<unsigned>::max())
     {
-        std::vector<KeyType> tree{0, nodeRange<KeyType>(0)};
+        std::vector<KeyType> tree{0, bvh2::nodeRange<KeyType>(0)};
         std::vector<unsigned> counts{unsigned(codesEnd - codesStart)};
 
         while (!updateOctree(codesStart, codesEnd, bucketSize, tree, counts, executor,maxCount));

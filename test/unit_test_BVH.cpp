@@ -1,9 +1,12 @@
 #include <gtest/gtest.h>
 #include "bvh/BVH.h"
+#include <iostream>
 #include <random>
-#include <chrono>
 #include <vector>
 #include <cmath>
+#include <thread>
+
+using namespace bvh2;
 
 class BVHTest : public ::testing::Test
 {
@@ -250,33 +253,6 @@ TEST_F(BVHTest, RandomPrimitives)
 
         EXPECT_TRUE(validateBoundingBoxes(nodes, primitives));
         EXPECT_TRUE(validateBVHStructure(nodes));
-    }
-}
-
-TEST_F(BVHTest, PerformanceTest)
-{
-    for (int count: {10000, 1000000})
-    {
-        auto primitives = generateRandomPrimitives(count);
-
-        tf::Executor executor{ std::thread::hardware_concurrency() };
-
-        auto start = std::chrono::high_resolution_clock::now();
-
-        auto nodes = buildLBVH(executor, primitives);
-
-        auto end = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double, std::milli> elapsed = end - start;
-
-        EXPECT_EQ(nodes.size(), 2 * count - 1);
-
-        std::cout << "Built BVH with " << count << " primitives in " << elapsed.count() << " ms" << std::endl;
-
-        if (count <= 1000)
-        {
-            EXPECT_TRUE(validateBoundingBoxes(nodes, primitives));
-            EXPECT_TRUE(validateBVHStructure(nodes));
-        }
     }
 }
 

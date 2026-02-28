@@ -1,6 +1,9 @@
 #include <iostream>
 #include <iomanip>
+#include <thread>
 #include "bvh/BVH.h"
+
+using namespace bvh2;
 
 void exampleUsage()
 {
@@ -48,7 +51,8 @@ void exampleUsage()
 
     std::cout << "Building LBVH for " << primitives.size() << " primitives..." << std::endl;
 
-    std::vector<BVHNode> bvh = buildLBVH(primitives);
+    tf::Executor executor(std::thread::hardware_concurrency());
+    std::vector<BVHNode> bvh = buildLBVH(executor, primitives);
 
     std::cout << "LBVH built successfully with " << bvh.size() << " nodes" << std::endl;
 
@@ -184,7 +188,7 @@ void exampleUsage()
 
     std::cout << "\n=== Morton Code Analysis ===\n";
 
-    std::vector<MortonPrimitive> mortonPrimitives = generateMortonCodes(primitives);
+    std::vector<MortonPrimitive<uint64_t>> mortonPrimitives = generateMortonCodes(primitives);
 
     const size_t numCodesToShow = std::min(size_t(10), mortonPrimitives.size());
     std::cout << "First " << numCodesToShow << " Morton codes:" << std::endl;

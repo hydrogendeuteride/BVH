@@ -34,21 +34,21 @@ template<>
 struct maxTreeLevel2D<unsigned long> : std::integral_constant<unsigned, 31> {};
 
 template<typename KeyType>
-constexpr bool isPowerOf4(KeyType n)
+inline bool isPowerOf4(KeyType n)
 {
-    unsigned lz = countLeadingZeros(n - 1) - unusedBits2D<KeyType>{};
+    unsigned lz = bvh2::countLeadingZeros(n - 1) - unusedBits2D<KeyType>{};
     return (lz % 2 == 0) && !(n & (n - 1));
 }
 
 template<typename KeyType>
-constexpr unsigned qtTreeLevel(KeyType codeRange)
+inline unsigned qtTreeLevel(KeyType codeRange)
 {
 //    assert(isPowerOf4(codeRange));
-    return (countLeadingZeros(static_cast<uint64_t>(codeRange - 1)) - unusedBits2D<KeyType>{}) / 2;
+    return (bvh2::countLeadingZeros(static_cast<uint64_t>(codeRange - 1)) - unusedBits2D<KeyType>{}) / 2;
 }
 
 template<typename KeyType>
-constexpr KeyType nodeRange2D(unsigned level)
+inline KeyType nodeRange2D(unsigned level)
 {
     assert(level <= maxTreeLevel2D<KeyType>{});
     unsigned shifts = maxTreeLevel2D<KeyType>{} - level;
@@ -56,13 +56,13 @@ constexpr KeyType nodeRange2D(unsigned level)
 }
 
 template<typename KeyType>
-constexpr unsigned quadDigit(KeyType code, unsigned position)
+inline unsigned quadDigit(KeyType code, unsigned position)
 {
     return (code >> (2u * (maxTreeLevel2D<KeyType>{} - position))) & 3u;
 }
 
 template<typename KeyType>
-constexpr KeyType encodePlaceholderBit2D(KeyType code, int prefixLength)
+inline KeyType encodePlaceholderBit2D(KeyType code, int prefixLength)
 {
     int nShifts = 2 * maxTreeLevel2D<KeyType>{} - prefixLength;
     KeyType ret = code >> nShifts;
@@ -71,13 +71,13 @@ constexpr KeyType encodePlaceholderBit2D(KeyType code, int prefixLength)
 }
 
 template<typename KeyType>
-constexpr unsigned decodePrefixLength2D(KeyType code)
+inline unsigned decodePrefixLength2D(KeyType code)
 {
-    return 8 * sizeof(KeyType) - 1 - countLeadingZeros(static_cast<uint64_t>(code));
+    return 8 * sizeof(KeyType) - 1 - bvh2::countLeadingZeros(static_cast<uint64_t>(code));
 }
 
 template<typename KeyType>
-constexpr KeyType decodePlaceholderBit2D(KeyType code)
+inline KeyType decodePlaceholderBit2D(KeyType code)
 {
     int prefixLength = decodePrefixLength2D<KeyType>(code);
     KeyType placeHolderMask = KeyType(1) << prefixLength;
@@ -86,9 +86,9 @@ constexpr KeyType decodePlaceholderBit2D(KeyType code)
 }
 
 template<typename KeyType>
-constexpr int commonPrefix2D(KeyType key1, KeyType key2)
+inline int commonPrefix2D(KeyType key1, KeyType key2)
 {
-    return int(countLeadingZeros(static_cast<uint64_t>(key1 ^ key2))) - unusedBits2D<KeyType>{};
+    return int(bvh2::countLeadingZeros(static_cast<uint64_t>(key1 ^ key2))) - unusedBits2D<KeyType>{};
 }
 
 #endif // BVH2_BITOPS2D_H
