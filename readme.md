@@ -1,212 +1,228 @@
-# BVH
+# BVH2
 
-Fast Linear Bounding Volume Hierarchy generation C++ header-only library with taskflow multithreading.
+Fast C++17 header-only library for LBVH, octree, and quadtree construction with Taskflow
+parallelism.
 
 ## Features
 
-- LBVH (Linear Bounding Volume Hierarchy)
-- Octree
-- Quadtree
+- LBVH build for `TriangleT<Scalar>` primitives (`bvh2::Primitive`, `bvh2::PrimitiveD`)
+- Deterministic LBVH behavior for duplicated Morton codes (tie-break by primitive index)
+- Selectable Morton sort backend: `bvh2::MortonSortMethod::StdSort` or `RadixSort`
+- Traversal helpers:
+  - `bvh2::traverseBVH`
+  - `cstone::traverseOctree`
+  - `qtree2d::traverseQuadtree`
+- Parallel Morton primitive sort utility: `bvh2::ChunkedRadixSort`
 
-## Installation
+## Requirements
 
-BVH2 is a header-only library. Simply include the headers in your project:
-```c++
-#include "bvh/BVH.h"
-#include "octree/Octree.h"
-#include "util/ParallelRadixSort.h"
+- C++17
+- CMake 3.15+
+- Taskflow headers (`taskflow/taskflow.hpp`)
+
+## Build
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j
 ```
+
+### CMake options
+
+- `BVH2_ENABLE_TESTS` (default: `ON`)
+- `BVH2_ENABLE_OPENMP` (default: `ON`)
+- `BVH2_ENABLE_AVX2` (default: `ON`)
+- `BVH2_USE_LOCAL_TASKFLOW` (default: `ON`)
+- `BVH2_TASKFLOW_INCLUDE_DIR` (optional Taskflow include directory)
+
+Taskflow headers are resolved in this order:
+1. `BVH2_TASKFLOW_INCLUDE_DIR`
+2. Bundled `taskflow/` directory (when `BVH2_USE_LOCAL_TASKFLOW=ON`)
+3. System include path (`find_path(taskflow/taskflow.hpp)`)
+
+## Library integration
+
+```cmake
+add_subdirectory(BVH2)
+target_link_libraries(your_target PRIVATE BVH2)
+```
+
+`BVH2` is an `INTERFACE` target, so there are no compiled library sources to link manually.
 
 ## Usage
 
-Parallel Radix Sort
+### Parallel radix sort
+
 ```c++
 #include "util/ParallelRadixSort.h"
+#include <taskflow/taskflow.hpp>
+#include <thread>
 #include <vector>
 
-int main() {
-    std::vector<MortonPrimitive<uint64_t>> primitives;
-    
-    for (uint32_t i = 0; i < 1000000; i++) {
-        uint64_t code = /* your Morton code generation */;
-        primitives.push_back({i, code});
-    }
-    
-    tf::Executor executor{std::thread::hardware_concurrency()};
-    
-    ChunkedRadixSort(executor, primitives);
-    return 0;
+int main()
+{
+    std::vector<bvh2::MortonPrimitive<uint64_t>> primitives;
+    primitives.push_back({0, 20});
+    primitives.push_back({1, 3});
+    primitives.push_back({2, 12});
+
+    tf::Executor executor(std::thread::hardware_concurrency());
+    bvh2::ChunkedRadixSort(executor, primitives);
 }
 ```
 
-LBVH
+### LBVH build and traversal
+
 ```c++
 #include "bvh/BVH.h"
+#include <taskflow/taskflow.hpp>
+#include <thread>
 #include <vector>
 
-int main() {
-    // Create a vector of triangle primitives
-    std::vector<Primitive> primitives;
-    
-    Primitive triangle;
-    triangle.v0 = Vec3<float>(0.0f, 0.0f, 0.0f);
-    triangle.v1 = Vec3<float>(1.0f, 0.0f, 0.0f);
-    triangle.v2 = Vec3<float>(0.0f, 1.0f, 0.0f);
-    triangle.updateBounds(); // compute AABB from triangle vertices
-    primitives.push_back(triangle);
-    
-    // Add more primitives...
-    
-    tf::Executor executor{std::thread::hardware_concurrency()};
+int main()
+{
+    std::vector<bvh2::Primitive> primitives;
+    primitives.emplace_back(Vec3<float>(0.0f, 0.0f, 0.0f),
+                            Vec3<float>(1.0f, 0.0f, 0.0f),
+                            Vec3<float>(0.0f, 1.0f, 0.0f));
 
-    // Choose sort method for Morton codes (StdSort or RadixSort)
-    std::vector<BVHNode> bvh =
-        buildLBVH<uint64_t>(executor, primitives, MortonSortMethod::RadixSort);
+    tf::Executor executor(std::thread::hardware_concurrency());
+    auto nodes = bvh2::buildLBVH<uint64_t>(
+            executor, primitives, bvh2::MortonSortMethod::RadixSort);
 
-    // Simple closest-hit ray traversal
-    Ray ray(Vec3<float>(-1.0f, 0.5f, 0.5f), Vec3<float>(1.0f, 0.0f, 0.0f));
-    uint32_t hitIndex;
-    float hitT;
-    if (traverseBVHClosestHit(bvh, primitives, ray, hitIndex, hitT)) {
-        // hitIndex is the index of the closest intersected primitive
-    }
-    
-    return 0;
+    bvh2::traverseBVH(nodes, [](uint32_t idx, const bvh2::BVHNode& node) {
+        (void)idx;
+        return !node.isLeaf; // return false to prune subtree
+    });
+
+    bvh2::Ray ray(Vec3<float>(-1.0f, 0.2f, 0.0f), Vec3<float>(1.0f, 0.0f, 0.0f));
+    uint32_t hitIndex = 0;
+    float hitT = 0.0f;
+    bool hit = bvh2::traverseBVHClosestHit(nodes, primitives, ray, hitIndex, hitT);
+    (void)hit;
 }
 ```
 
-Double precision BVH
+### Double precision BVH
+
 ```c++
 #include "bvh/BVH.h"
+#include <taskflow/taskflow.hpp>
+#include <thread>
 #include <vector>
 
-int main() {
-    std::vector<PrimitiveD> primitives;
+int main()
+{
+    std::vector<bvh2::PrimitiveD> primitives;
+    primitives.emplace_back(Vec3<double>(0.0, 0.0, 0.0),
+                            Vec3<double>(1.0, 0.0, 0.0),
+                            Vec3<double>(0.0, 1.0, 0.0));
 
-    // One triangle in double precision
-    PrimitiveD tri;
-    tri.v0 = Vec3<double>(0.0, 0.0, 0.0);
-    tri.v1 = Vec3<double>(1.0, 0.0, 0.0);
-    tri.v2 = Vec3<double>(0.0, 1.0, 0.0);
-    tri.updateBounds();
-    primitives.push_back(tri);
+    tf::Executor executor(std::thread::hardware_concurrency());
+    auto nodes = bvh2::buildLBVH<uint64_t>(executor, primitives);
 
-    tf::Executor executor{std::thread::hardware_concurrency()};
-
-    // BVH over double-precision triangles
-    std::vector<BVHNodeD> bvh = buildLBVH<uint64_t>(executor, primitives);
-
-    RayD ray(Vec3<double>(-1.0, 0.5, 0.5), Vec3<double>(1.0, 0.0, 0.0));
-    uint32_t hitIndex;
-    double hitT;
-    if (traverseBVHClosestHit(bvh, primitives, ray, hitIndex, hitT)) {
-        // hitIndex is the closest hit in double precision
-    }
-
-    return 0;
+    bvh2::RayD ray(Vec3<double>(-1.0, 0.2, 0.0), Vec3<double>(1.0, 0.0, 0.0));
+    uint32_t hitIndex = 0;
+    double hitT = 0.0;
+    bool hit = bvh2::traverseBVHClosestHit(nodes, primitives, ray, hitIndex, hitT);
+    (void)hit;
 }
 ```
 
-Octree
+### Octree (3D)
+
 ```c++
 #include "octree/Octree.h"
-#include "util/Hilbert.h"
+#include <algorithm>
+#include <taskflow/taskflow.hpp>
+#include <thread>
 #include <vector>
 
-int main() {
-    std::vector<float> x = {1.0f, 2.0f, 3.0f, /* more points */ };
-    std::vector<float> y = {0.5f, 1.5f, 2.5f, /* more points */ };
-    std::vector<float> z = {0.0f, 1.0f, 2.0f, /* more points */ };
-    
-    Box<float> box;
-    for (size_t i = 0; i < x.size(); i++) {
-        Vec3<float> point(x[i], y[i], z[i]);
-        box.expand(point);
-    }
-    
-    using KeyType = uint64_t;
-    size_t numPoints = x.size();
-    std::vector<KeyType> codes(numPoints);
-    
-    tf::Executor executor{std::thread::hardware_concurrency()};
-    
-    computeSfcKeys(x.data(), y.data(), z.data(), codes.data(), numPoints, box, executor);
-    
-    std::sort(codes.begin(), codes.end());
-    
-    unsigned bucketSize = 16; //example bucket size
-    cstone::Octree<KeyType> octree(bucketSize);
-    octree.build(codes.data(), codes.data() + codes.size(), executor);
-    
-    const auto& tree = octree.cornerstone();
-    const auto& counts = octree.counts();
-    const auto view = octree.view();
+int main()
+{
+    std::vector<float> x = {0.1f, 0.4f, 0.8f};
+    std::vector<float> y = {0.3f, 0.5f, 0.9f};
+    std::vector<float> z = {0.2f, 0.7f, 0.6f};
 
-    // Simple depth-first traversal over all nodes
-    cstone::traverseOctree(view, [](cstone::TreeNodeIndex idx, KeyType key, unsigned level) {
-        // idx: node index in view.prefixes, key: Morton/Hilbert key, level: tree depth
-        (void)idx; (void)key; (void)level;
-        return true; // return false to prune this subtree
+    Box<float> box;
+    for (size_t i = 0; i < x.size(); ++i) box.expand(Vec3<float>(x[i], y[i], z[i]));
+
+    std::vector<uint64_t> keys(x.size());
+    tf::Executor executor(std::thread::hardware_concurrency());
+    computeSfcKeys(x.data(), y.data(), z.data(), keys.data(), keys.size(), box, executor);
+    std::sort(keys.begin(), keys.end());
+
+    cstone::Octree<uint64_t> octree(16);
+    octree.build(keys.data(), keys.data() + keys.size(), executor);
+
+    auto view = octree.view();
+    cstone::traverseOctree(view, [](cstone::TreeNodeIndex idx, uint64_t key, unsigned level) {
+        (void)idx;
+        (void)key;
+        (void)level;
+        return true;
     });
-    
-    return 0;
 }
 ```
 
-Quadtree (2D)
+### Quadtree (2D)
+
 ```c++
 #include "quadtree/Quadtree.h"
-#include "quadtree/Hilbert2D.h"
-#include "util/Box2D.h"
 #include <algorithm>
+#include <taskflow/taskflow.hpp>
+#include <thread>
+#include <vector>
 
-int main() {
+int main()
+{
     std::vector<float> x = {0.1f, 0.5f, 0.9f};
     std::vector<float> y = {0.2f, 0.4f, 0.8f};
 
-    Box2D<float> box; for (size_t i=0;i<x.size();++i) box.expand({x[i],y[i]});
+    Box2D<float> box;
+    for (size_t i = 0; i < x.size(); ++i) box.expand({x[i], y[i]});
 
-    using KeyType = uint64_t;
-    std::vector<KeyType> keys(x.size());
-    tf::Executor ex(1);
-    computeSfcKeys2D<float,KeyType>(x.data(), y.data(), keys.data(), keys.size(), box, ex);
+    std::vector<uint64_t> keys(x.size());
+    tf::Executor executor(std::thread::hardware_concurrency());
+    computeSfcKeys2D<float, uint64_t>(x.data(), y.data(), keys.data(), keys.size(), box, executor);
     std::sort(keys.begin(), keys.end());
 
-    qtree2d::Quadtree<KeyType> qt(16);
-    qt.build(keys.data(), keys.data()+keys.size(), ex);
+    qtree2d::Quadtree<uint64_t> quadtree(16);
+    quadtree.build(keys.data(), keys.data() + keys.size(), executor);
 
-    auto view = qt.view();
-
-    // Simple depth-first traversal over all quadtree nodes
-    qtree2d::traverseQuadtree(view, [](TreeNodeIndex idx, KeyType key, unsigned level) {
-        (void)idx; (void)key; (void)level;
+    auto view = quadtree.view();
+    qtree2d::traverseQuadtree(view, [](qtree2d::TreeNodeIndex idx, uint64_t key, unsigned level) {
+        (void)idx;
+        (void)key;
+        (void)level;
         return true;
     });
-
-    return 0;
 }
 ```
 
-## Performance
-System: AMD Ryzen 7 6800HS 8 core CPU, 32GB RAM, float32
+## Tests and performance tests
 
-|Structure| Input Number   | Build time (ms) | # Threads |
-|--------|----------------|-----------------|-----------|
-|Radix Sort| 1M uint64 keys | 30 ms           | 16        |
-|BVH| 10K Triangles  | 1.87 ms         | 1         |
-|BVH| 10K Triangles  | 1.64 ms         | 16        |
-|BVH| 1M Triangles   | 157 ms          | 16        |
-|Octree| 10K Points     | 3.36 ms         | 1         |
-|Octree| 10K Points     | 6.09 ms         | 16        |
-|Octree| 1M Points      | 102 ms          | 16        |
-|Quadtree| 10K Points     | 4.81ms          | 1         |
-|Quadtree| 1M Points      | 34.86ms         | 16        |
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBVH2_ENABLE_TESTS=ON
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
 
+Run individual binaries:
+
+- `build/test/integration_test`
+- `build/test/unit_test_radix_sort`
+- `build/test/unit_test_BVH`
+- `build/test/unit_test_octree`
+- `build/test/unit_test_quadtree`
+- `build/test/perf_test_radix_sort`
+- `build/test/perf_test_BVH`
+- `build/test/perf_test_octree`
+- `build/test/perf_test_quadtree`
 
 ## References
 
-- Sebastian Keller, Aurélien Cavelan, Rubén Cabezon, Lucio Mayer, Florina M. Ciorba.  
-  *Cornerstone: Octree Construction Algorithms for Scalable Particle Simulations*.  
+- Sebastian Keller, Aurélien Cavelan, Rubén Cabezon, Lucio Mayer, Florina M. Ciorba.
+  *Cornerstone: Octree Construction Algorithms for Scalable Particle Simulations*.
   arXiv:2307.06345 [astro-ph.IM], 2023. https://arxiv.org/abs/2307.06345
-
 - Theo Karras, [*Thinking Parallel, Part III: Tree Construction on the GPU*](https://developer.nvidia.com/blog/thinking-parallel-part-iii-tree-construction-gpu/), NVIDIA Blog.
