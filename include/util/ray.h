@@ -6,6 +6,9 @@
 #include <algorithm>
 #include <cmath>
 
+namespace bvh2
+{
+
 template<typename Scalar>
 struct RayT
 {
@@ -54,21 +57,47 @@ inline bool intersectRayAABB(const RayT<Scalar> &ray,
                              Scalar tmin, Scalar tmax,
                              Scalar &tNear, Scalar &tFar)
 {
+    if (!(tmin <= tmax) || !std::isfinite(tmin) || !std::isfinite(tmax))
+    {
+        return false;
+    }
+
     tNear = tmin;
     tFar = tmax;
 
     for (int axis = 0; axis < 3; ++axis)
     {
-        Scalar invD = Scalar(1) / ray.direction[axis];
-        Scalar t0 = (box.min[axis] - ray.origin[axis]) * invD;
-        Scalar t1 = (box.max[axis] - ray.origin[axis]) * invD;
+        const Scalar origin = ray.origin[axis];
+        const Scalar direction = ray.direction[axis];
+        const Scalar boxMin = box.min[axis];
+        const Scalar boxMax = box.max[axis];
 
-        if (invD < Scalar(0)) std::swap(t0, t1);
+        if (!std::isfinite(origin) || !std::isfinite(direction) ||
+            !std::isfinite(boxMin) || !std::isfinite(boxMax))
+        {
+            return false;
+        }
+
+        // Parallel slab: avoid inf*0 (NaN) by handling zero direction explicitly.
+        if (direction == Scalar(0))
+        {
+            if (origin < boxMin || origin > boxMax)
+            {
+                return false;
+            }
+            continue;
+        }
+
+        Scalar invD = Scalar(1) / direction;
+        Scalar t0 = (boxMin - origin) * invD;
+        Scalar t1 = (boxMax - origin) * invD;
+
+        if (t0 > t1) std::swap(t0, t1);
 
         tNear = std::max(tNear, t0);
         tFar = std::min(tFar, t1);
 
-        if (tFar < tNear) return false;
+        if (tNear > tFar) return false;
     }
 
     return tFar >= tNear;
@@ -163,5 +192,7 @@ inline bool intersectRayPrimitive(const RayT<Scalar> &ray,
     tHit = tNear;
     return true;
 }
+
+} // namespace bvh2
 
 #endif //RAY_H

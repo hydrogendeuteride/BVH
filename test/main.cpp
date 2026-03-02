@@ -58,9 +58,6 @@ void exampleUsage()
 
     std::cout << "\n=== BVH Node Details ===\n";
 
-    uint32_t numPrimitives = primitives.size();
-    uint32_t numInternalNodes = numPrimitives - 1;
-
     for (size_t i = 0; i < bvh.size(); ++i)
     {
         const BVHNode &node = bvh[i];

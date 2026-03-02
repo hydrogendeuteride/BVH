@@ -13,6 +13,9 @@
 #include <taskflow/taskflow.hpp>
 #include <taskflow/algorithm/for_each.hpp>
 
+namespace bvh2
+{
+
 constexpr unsigned mortonToHilbert[8] = {0, 1, 3, 2, 7, 6, 4, 5};
 
 template<typename KeyType>
@@ -150,12 +153,21 @@ template<typename T, typename KeyType>
 void computeSfcKeys(const T *x, const T *y, const T *z, KeyType *particleKeys, size_t n, const Box<T> &box,
                     tf::Executor &executor)
 {
+    constexpr unsigned cubeLength = (1u << bvh2::maxTreeLevel<KeyType>());
+
+    const T xmin = box.xmin();
+    const T ymin = box.ymin();
+    const T zmin = box.zmin();
+    const T mx = T(cubeLength) * box.ilx();
+    const T my = T(cubeLength) * box.ily();
+    const T mz = T(cubeLength) * box.ilz();
+
     tf::Taskflow taskflow;
 
     taskflow.for_each_index(
-            0, n, 1,
+            size_t(0), n, size_t(1),
             [&](size_t i) {
-                particleKeys[i] = hilbert3D<KeyType>(x[i], y[i], z[i], box);
+                particleKeys[i] = hilbert3D<KeyType>(x[i], y[i], z[i], xmin, ymin, zmin, mx, my, mz);
             }
     );
 
@@ -180,5 +192,7 @@ std::tuple<Vec3<T>, Vec3<T>> centerAndSize(const IBox<KeyType> &ibox, const Box<
 
     return {center, size};
 }
+
+} // namespace bvh2
 
 #endif // BVH2_HILBERT_H

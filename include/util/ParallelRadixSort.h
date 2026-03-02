@@ -2,6 +2,7 @@
 #define BVH2_PARALLELRADIXSORT_H
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <type_traits>
 #include <vector>
@@ -18,98 +19,102 @@ void ChunkedRadixSort(tf::Executor &executor, std::vector<MortonPrimitive<Morton
     if (n <= 1) return;
 
     using UnsignedCode = std::make_unsigned_t<MortonCodeType>;
+    using CountType = size_t;
 
     std::vector<MortonPrimitive<MortonCodeType>> temp(n);
 
-    constexpr int BITS_PER_PASS = 8;
-    constexpr int KEY_BITS = std::numeric_limits<UnsignedCode>::digits;
-    constexpr int NUM_PASSES = (KEY_BITS + BITS_PER_PASS - 1) / BITS_PER_PASS;
-    constexpr int NUM_BUCKETS = 1 << BITS_PER_PASS;
+    constexpr size_t BITS_PER_PASS = 8;
+    constexpr size_t KEY_BITS = std::numeric_limits<UnsignedCode>::digits;
+    constexpr size_t NUM_PASSES = (KEY_BITS + BITS_PER_PASS - 1) / BITS_PER_PASS;
+    constexpr size_t NUM_BUCKETS = size_t(1) << BITS_PER_PASS;
+    using Histogram = std::array<CountType, NUM_BUCKETS>;
 
     std::vector<MortonPrimitive<MortonCodeType>> *src = &mortonPrimitives;
     std::vector<MortonPrimitive<MortonCodeType>> *dst = &temp;
 
-    const size_t maxThreads = std::max<size_t>(1, executor.num_workers());
+    const size_t workerCount = std::max<size_t>(1, executor.num_workers());
+    const size_t threadCount = std::min(n, workerCount);
 
-    for (int pass = 0; pass < NUM_PASSES; pass++)
+    std::vector<size_t> chunkStarts(threadCount + 1);
+    for (size_t t = 0; t <= threadCount; ++t)
     {
-        const int shift = pass * BITS_PER_PASS;
-        const int activeBits = std::min(BITS_PER_PASS, KEY_BITS - shift);
-        const UnsignedCode mask = (UnsignedCode(1) << activeBits) - UnsignedCode(1);
+        chunkStarts[t] = (n * t) / threadCount;
+    }
 
-        std::vector<std::vector<size_t>> threadHistogram(maxThreads, std::vector<size_t>(NUM_BUCKETS, 0));
+    std::vector<Histogram> threadHistogram(threadCount);
+    std::vector<Histogram> threadOffsets(threadCount);
 
-        tf::Taskflow taskflow;
+    size_t shift = 0;
+    UnsignedCode mask = 0;
 
-        std::vector<tf::Task> hist_tasks;
-        hist_tasks.reserve(maxThreads);
+    tf::Taskflow taskflow;
 
-        for (size_t t = 0; t < maxThreads; t++)
-        {
-            hist_tasks.push_back(
-                    taskflow.emplace([&, t]() {
-                        size_t start = (n * t) / maxThreads;
-                        size_t end = (n * (t + 1)) / maxThreads;
-                        auto &localHist = threadHistogram[t];
-                        for (size_t i = start; i < end; i++)
-                        {
-                            UnsignedCode code = static_cast<UnsignedCode>((*src)[i].mortonCode);
-                            size_t bucket = static_cast<size_t>((code >> shift) & mask);
-                            localHist[bucket]++;
-                        }
-                    })
-            );
-        }
+    std::vector<tf::Task> histTasks;
+    histTasks.reserve(threadCount);
+    for (size_t t = 0; t < threadCount; ++t)
+    {
+        histTasks.push_back(taskflow.emplace([&, t]() {
+            size_t start = chunkStarts[t];
+            size_t end = chunkStarts[t + 1];
+            auto &localHist = threadHistogram[t];
+            localHist.fill(0);
 
-        std::vector<std::vector<size_t>> threadOffsets(maxThreads, std::vector<size_t>(NUM_BUCKETS, 0));
-
-        auto reduce = taskflow.emplace([&]() {
-            size_t prefix = 0;
-            for (int b = 0; b < NUM_BUCKETS; ++b)
+            for (size_t i = start; i < end; ++i)
             {
-                size_t sum = 0;
-
-                for (size_t t = 0; t < maxThreads; ++t)
-                {
-                    threadOffsets[t][b] = sum;
-                    sum += threadHistogram[t][b];
-                }
-
-                for (size_t t = 0; t < maxThreads; ++t)
-                {
-                    threadOffsets[t][b] += prefix;
-                }
-                prefix += sum;
+                UnsignedCode code = static_cast<UnsignedCode>((*src)[i].mortonCode);
+                size_t bucket = static_cast<size_t>((code >> shift) & mask);
+                ++localHist[bucket];
             }
-        });
+        }));
+    }
 
-        for (auto &ht: hist_tasks)
+    auto reduceTask = taskflow.emplace([&]() {
+        CountType bucketPrefix = 0;
+        for (size_t b = 0; b < NUM_BUCKETS; ++b)
         {
-            reduce.succeed(ht);
+            CountType threadPrefix = 0;
+
+            for (size_t t = 0; t < threadCount; ++t)
+            {
+                threadOffsets[t][b] = bucketPrefix + threadPrefix;
+                threadPrefix += threadHistogram[t][b];
+            }
+
+            bucketPrefix += threadPrefix;
         }
+    });
 
-        std::vector<tf::Task> scatter_tasks;
-        scatter_tasks.reserve(maxThreads);
+    for (auto &task : histTasks)
+    {
+        reduceTask.succeed(task);
+    }
 
-        for (size_t t = 0; t < maxThreads; t++)
-        {
-            scatter_tasks.push_back(
-                    taskflow.emplace([&, t]() {
-                        size_t start = (n * t) / maxThreads;
-                        size_t end = (n * (t + 1)) / maxThreads;
-                        auto &localOff = threadOffsets[t];
-                        for (size_t i = start; i < end; i++)
-                        {
-                            UnsignedCode code = static_cast<UnsignedCode>((*src)[i].mortonCode);
-                            size_t bucket = static_cast<size_t>((code >> shift) & mask);
-                            size_t pos = localOff[bucket]++;
-                            (*dst)[pos] = (*src)[i];
-                        }
-                    })
-            );
+    std::vector<tf::Task> scatterTasks;
+    scatterTasks.reserve(threadCount);
+    for (size_t t = 0; t < threadCount; ++t)
+    {
+        scatterTasks.push_back(taskflow.emplace([&, t]() {
+            size_t start = chunkStarts[t];
+            size_t end = chunkStarts[t + 1];
+            auto &localOff = threadOffsets[t];
 
-            scatter_tasks.back().succeed(reduce);
-        }
+            for (size_t i = start; i < end; ++i)
+            {
+                UnsignedCode code = static_cast<UnsignedCode>((*src)[i].mortonCode);
+                size_t bucket = static_cast<size_t>((code >> shift) & mask);
+                size_t pos = localOff[bucket]++;
+                (*dst)[pos] = (*src)[i];
+            }
+        }));
+
+        scatterTasks.back().succeed(reduceTask);
+    }
+
+    for (size_t pass = 0; pass < NUM_PASSES; ++pass)
+    {
+        shift = pass * BITS_PER_PASS;
+        const size_t activeBits = std::min(BITS_PER_PASS, KEY_BITS - shift);
+        mask = (UnsignedCode(1) << activeBits) - UnsignedCode(1);
 
         executor.run(taskflow).wait();
 
@@ -118,7 +123,7 @@ void ChunkedRadixSort(tf::Executor &executor, std::vector<MortonPrimitive<Morton
 
     if (src != &mortonPrimitives)
     {
-        mortonPrimitives = temp;
+        mortonPrimitives.swap(temp);
     }
 }
 

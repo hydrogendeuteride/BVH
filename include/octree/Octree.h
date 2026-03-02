@@ -198,8 +198,8 @@ namespace cstone
     template<typename T, class KeyType>
     struct OctreeNsView
     {
-        const Vec3<T> *centers;
-        const Vec3<T> *sizes;
+        const bvh2::Vec3<T> *centers;
+        const bvh2::Vec3<T> *sizes;
 
         const TreeNodeIndex *childOffsets;
         const TreeNodeIndex *internalToLeaf;
@@ -338,9 +338,9 @@ namespace cstone
     template<typename KeyType, typename T>
     void nodeFpCenters(const KeyType *prefixes,
                        TreeNodeIndex numNodes,
-                       Vec3<T> *centers,
-                       Vec3<T> *sizes,
-                       const Box<T> &box,
+                       bvh2::Vec3<T> *centers,
+                       bvh2::Vec3<T> *sizes,
+                       const bvh2::Box<T> &box,
                        tf::Executor &executor)
     {
         tf::Taskflow flow;
@@ -350,8 +350,8 @@ namespace cstone
                                 KeyType startKey = bvh2::decodePlaceholderBit(prefix);
                                 unsigned level = bvh2::decodePrefixLength(prefix) / 3;
 
-                                auto nodeBox = hilbertIBox(startKey, level);
-                                std::tie(centers[i], sizes[i]) = centerAndSize(nodeBox, box);
+                                auto nodeBox = bvh2::hilbertIBox(startKey, level);
+                                std::tie(centers[i], sizes[i]) = bvh2::centerAndSize(nodeBox, box);
                             });
         executor.run(flow).wait();
     }

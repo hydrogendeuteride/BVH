@@ -67,10 +67,10 @@ TEST(OctreePerformance, BuildTime)
     {
         auto coords = generateRandomCoordinates(numPoints);
 
-        Box<float> box;
+        bvh2::Box<float> box;
         for (size_t i = 0; i < numPoints; ++i)
         {
-            Vec3<float> point(coords[i * 3], coords[i * 3 + 1], coords[i * 3 + 2]);
+            bvh2::Vec3<float> point(coords[i * 3], coords[i * 3 + 1], coords[i * 3 + 2]);
             box.expand(point);
         }
 
@@ -86,7 +86,7 @@ TEST(OctreePerformance, BuildTime)
 
         auto start = std::chrono::high_resolution_clock::now();
         std::vector<KeyType> codes(numPoints);
-        computeSfcKeys(x.data(), y.data(), z.data(), codes.data(), numPoints, box, executor);
+        bvh2::computeSfcKeys(x.data(), y.data(), z.data(), codes.data(), numPoints, box, executor);
         auto codeEnd = std::chrono::high_resolution_clock::now();
 
         std::sort(codes.begin(), codes.end());
@@ -136,10 +136,10 @@ TEST(OctreePerformance, ThreadScaling)
     const size_t numPoints = 1000000;
     auto coords = generateRandomCoordinates(numPoints);
 
-    Box<float> box;
+    bvh2::Box<float> box;
     for (size_t i = 0; i < numPoints; ++i)
     {
-        Vec3<float> point(coords[i * 3], coords[i * 3 + 1], coords[i * 3 + 2]);
+        bvh2::Vec3<float> point(coords[i * 3], coords[i * 3 + 1], coords[i * 3 + 2]);
         box.expand(point);
     }
 
@@ -148,7 +148,7 @@ TEST(OctreePerformance, ThreadScaling)
 
     std::vector<KeyType> codes(numPoints);
     tf::Executor executor16(16);
-    computeSfcKeys(x.data(), y.data(), z.data(), codes.data(), numPoints, box, executor16);
+    bvh2::computeSfcKeys(x.data(), y.data(), z.data(), codes.data(), numPoints, box, executor16);
     std::sort(codes.begin(), codes.end());
 
     std::cout << "\n=== Thread Scaling Test ===\n";

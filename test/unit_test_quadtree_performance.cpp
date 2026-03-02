@@ -14,6 +14,7 @@
 #include "util/Box2D.h"
 
 using KeyType = std::uint64_t;
+using bvh2::Box2D;
 
 static std::vector<float> gen2D(size_t n, float minv = -100.f, float maxv = 100.f)
 {
@@ -117,4 +118,3 @@ TEST(QuadtreePerformance, ThreadScaling)
 
     ASSERT_GT(base, 0.0);
 }
-

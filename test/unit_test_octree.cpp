@@ -165,7 +165,7 @@ TEST(Octree, DebugPrint)
     }
 }
 
-using Vec3f = Vec3<float>;
+using Vec3f = bvh2::Vec3<float>;
 
 static void checkParentContainsChildren(const std::vector<Vec3f> &centers,
                                         const std::vector<Vec3f> &sizes,
@@ -252,11 +252,11 @@ TEST(Octree, ParentContainsChildren)
         z[i] = uni(rng);
     }
 
-    Box<float> globalBox(Vec3f{0, 0, 0}, Vec3f{1, 1, 1});
+    bvh2::Box<float> globalBox(Vec3f{0, 0, 0}, Vec3f{1, 1, 1});
 
     std::vector<KeyType> keys(N);
     tf::Executor executor;
-    computeSfcKeys(x.data(), y.data(), z.data(), keys.data(), N, globalBox, executor);
+    bvh2::computeSfcKeys(x.data(), y.data(), z.data(), keys.data(), N, globalBox, executor);
 
     const unsigned bucketSize = 16;
     cstone::Octree<KeyType> tree(bucketSize);

@@ -5,6 +5,10 @@
 #include <limits>
 #include <array>
 #include <cmath>
+#include <type_traits>
+
+namespace bvh2
+{
 
 template<typename T>
 struct Vec3
@@ -208,5 +212,6 @@ struct IBox
     {}
 };
 
+} // namespace bvh2
 
 #endif // BVH2_BOX_H

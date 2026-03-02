@@ -5,6 +5,9 @@
 #include <limits>
 #include <type_traits>
 
+namespace bvh2
+{
+
 template<typename T>
 struct Vec2
 {
@@ -101,5 +104,6 @@ struct IBox2D
             : xmin(xmin_), xmax(xmax_), ymin(ymin_), ymax(ymax_) {}
 };
 
-#endif // BVH2_BOX2D_H
+} // namespace bvh2
 
+#endif // BVH2_BOX2D_H

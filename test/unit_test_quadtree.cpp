@@ -14,6 +14,8 @@
 
 using KeyType = std::uint64_t;
 using TreeNodeIndex = qtree2d::TreeNodeIndex;
+using bvh2::Box2D;
+using bvh2::Vec2;
 
 static std::vector<float> generateRandom2D(size_t n, unsigned seed = 42)
 {

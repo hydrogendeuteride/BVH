@@ -354,6 +354,33 @@ TEST_F(BVHTest, RayTraversalFindsClosestPrimitive)
     EXPECT_GT(hitT, 0.0f);
 }
 
+TEST_F(BVHTest, RayAABBParallelAxisBoundaryIsStable)
+{
+    BoundingBox box(Vec3<float>(0.0f, 0.0f, 0.0f), Vec3<float>(1.0f, 1.0f, 1.0f));
+    Ray ray(Vec3<float>(0.0f, 0.5f, 0.5f), Vec3<float>(0.0f, 1.0f, 0.0f), 0.0f, 10.0f);
+
+    float tNear = 0.0f;
+    float tFar = 0.0f;
+    bool hit = intersectRayAABB(ray, box, ray.tmin, ray.tmax, tNear, tFar);
+
+    EXPECT_TRUE(hit);
+    EXPECT_TRUE(std::isfinite(tNear));
+    EXPECT_TRUE(std::isfinite(tFar));
+    EXPECT_LE(tNear, tFar);
+}
+
+TEST_F(BVHTest, RayAABBParallelAxisOutsideSlabMisses)
+{
+    BoundingBox box(Vec3<float>(0.0f, 0.0f, 0.0f), Vec3<float>(1.0f, 1.0f, 1.0f));
+    Ray ray(Vec3<float>(-0.1f, 0.5f, 0.5f), Vec3<float>(0.0f, 1.0f, 0.0f), 0.0f, 10.0f);
+
+    float tNear = 0.0f;
+    float tFar = 0.0f;
+    bool hit = intersectRayAABB(ray, box, ray.tmin, ray.tmax, tNear, tFar);
+
+    EXPECT_FALSE(hit);
+}
+
 TEST_F(BVHTest, BuildLBVHWithDifferentSortMethods)
 {
     auto primitives = generateRandomPrimitives(128);

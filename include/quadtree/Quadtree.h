@@ -269,9 +269,9 @@ namespace qtree2d
     template<typename KeyType, typename T>
     void nodeFpCenters2D(const KeyType *prefixes,
                          TreeNodeIndex numNodes,
-                         Vec2<T> *centers,
-                         Vec2<T> *sizes,
-                         const Box2D<T> &box,
+                         bvh2::Vec2<T> *centers,
+                         bvh2::Vec2<T> *sizes,
+                         const bvh2::Box2D<T> &box,
                          tf::Executor &executor)
     {
         tf::Taskflow flow;

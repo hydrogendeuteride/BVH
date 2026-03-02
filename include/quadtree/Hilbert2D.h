@@ -81,7 +81,7 @@ inline std::tuple<unsigned, unsigned> decodeHilbert2D(KeyType key) noexcept
 }
 
 template<typename KeyType>
-inline IBox2D<KeyType> hilbertIBox2D(KeyType keyStart, unsigned level) noexcept
+inline bvh2::IBox2D<KeyType> hilbertIBox2D(KeyType keyStart, unsigned level) noexcept
 {
     const unsigned maxCoord = 1u << maxTreeLevel2D<KeyType>();
     unsigned side = maxCoord >> level;
@@ -109,14 +109,15 @@ inline KeyType hilbert2D(T x, T y, T xmin, T ymin, T mx, T my)
 }
 
 template<typename KeyType, typename T>
-inline KeyType hilbert2D(T x, T y, const Box2D<T> &box)
+inline KeyType hilbert2D(T x, T y, const bvh2::Box2D<T> &box)
 {
     const unsigned grid = 1u << maxTreeLevel2D<KeyType>();
     return hilbert2D<KeyType>(x, y, box.xmin(), box.ymin(), grid * box.ilx(), grid * box.ily());
 }
 
 template<typename T, typename KeyType>
-inline std::tuple<Vec2<T>, Vec2<T>> centerAndSize2D(const IBox2D<KeyType> &ibox, const Box2D<T> &box)
+inline std::tuple<bvh2::Vec2<T>, bvh2::Vec2<T>> centerAndSize2D(const bvh2::IBox2D<KeyType> &ibox,
+                                                                 const bvh2::Box2D<T> &box)
 {
     const T norm = T(1) / T(1u << maxTreeLevel2D<KeyType>());
 
@@ -125,19 +126,25 @@ inline std::tuple<Vec2<T>, Vec2<T>> centerAndSize2D(const IBox2D<KeyType> &ibox,
     T xmax = box.min.x + (box.max.x - box.min.x) * ibox.xmax * norm;
     T ymax = box.min.y + (box.max.y - box.min.y) * ibox.ymax * norm;
 
-    Vec2<T> center{(xmin + xmax) * T(0.5), (ymin + ymax) * T(0.5)};
-    Vec2<T> size  {(xmax - xmin) * T(0.5), (ymax - ymin) * T(0.5)};
+    bvh2::Vec2<T> center{(xmin + xmax) * T(0.5), (ymin + ymax) * T(0.5)};
+    bvh2::Vec2<T> size  {(xmax - xmin) * T(0.5), (ymax - ymin) * T(0.5)};
 
     return {center, size};
 }
 
 template<typename T, typename KeyType>
 inline void computeSfcKeys2D(const T *x, const T *y, KeyType *keys,
-                             size_t n, const Box2D<T> &box, tf::Executor &executor)
+                             size_t n, const bvh2::Box2D<T> &box, tf::Executor &executor)
 {
+    const T grid = T(uint64_t(1) << maxTreeLevel2D<KeyType>());
+    const T xmin = box.xmin();
+    const T ymin = box.ymin();
+    const T mx = grid * box.ilx();
+    const T my = grid * box.ily();
+
     tf::Taskflow tf;
     tf.for_each_index(size_t(0), n, size_t(1), [&](size_t i) {
-        keys[i] = hilbert2D<KeyType>(x[i], y[i], box);
+        keys[i] = hilbert2D<KeyType>(x[i], y[i], xmin, ymin, mx, my);
     });
     executor.run(tf).wait();
 }

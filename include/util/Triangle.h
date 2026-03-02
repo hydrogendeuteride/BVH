@@ -4,6 +4,9 @@
 #include "Box.h"
 #include "ray.h"
 
+namespace bvh2
+{
+
 template<typename Scalar>
 struct TriangleT
 {
@@ -53,5 +56,6 @@ inline bool intersectRayPrimitive(const RayT<Scalar> &ray,
     return intersectRayTriangle<Scalar>(ray, tri.v0, tri.v1, tri.v2, tmin, tmax, tHit);
 }
 
-#endif // BVH2_TRIANGLE_H
+} // namespace bvh2
 
+#endif // BVH2_TRIANGLE_H

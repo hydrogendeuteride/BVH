@@ -30,8 +30,8 @@ cmake --build build -j
 ### CMake options
 
 - `BVH2_ENABLE_TESTS` (default: `ON`)
-- `BVH2_ENABLE_OPENMP` (default: `ON`)
-- `BVH2_ENABLE_AVX2` (default: `ON`)
+- `BVH2_ENABLE_OPENMP` (default: `OFF`, test/perf targets only)
+- `BVH2_ENABLE_AVX2` (default: `OFF`, test/perf targets only)
 - `BVH2_USE_LOCAL_TASKFLOW` (default: `ON`)
 - `BVH2_TASKFLOW_INCLUDE_DIR` (optional Taskflow include directory)
 
@@ -82,9 +82,9 @@ int main()
 int main()
 {
     std::vector<bvh2::Primitive> primitives;
-    primitives.emplace_back(Vec3<float>(0.0f, 0.0f, 0.0f),
-                            Vec3<float>(1.0f, 0.0f, 0.0f),
-                            Vec3<float>(0.0f, 1.0f, 0.0f));
+    primitives.emplace_back(bvh2::Vec3<float>(0.0f, 0.0f, 0.0f),
+                            bvh2::Vec3<float>(1.0f, 0.0f, 0.0f),
+                            bvh2::Vec3<float>(0.0f, 1.0f, 0.0f));
 
     tf::Executor executor(std::thread::hardware_concurrency());
     auto nodes = bvh2::buildLBVH<uint64_t>(
@@ -95,7 +95,8 @@ int main()
         return !node.isLeaf; // return false to prune subtree
     });
 
-    bvh2::Ray ray(Vec3<float>(-1.0f, 0.2f, 0.0f), Vec3<float>(1.0f, 0.0f, 0.0f));
+    bvh2::Ray ray(bvh2::Vec3<float>(-1.0f, 0.2f, 0.0f),
+                  bvh2::Vec3<float>(1.0f, 0.0f, 0.0f));
     uint32_t hitIndex = 0;
     float hitT = 0.0f;
     bool hit = bvh2::traverseBVHClosestHit(nodes, primitives, ray, hitIndex, hitT);
@@ -114,14 +115,15 @@ int main()
 int main()
 {
     std::vector<bvh2::PrimitiveD> primitives;
-    primitives.emplace_back(Vec3<double>(0.0, 0.0, 0.0),
-                            Vec3<double>(1.0, 0.0, 0.0),
-                            Vec3<double>(0.0, 1.0, 0.0));
+    primitives.emplace_back(bvh2::Vec3<double>(0.0, 0.0, 0.0),
+                            bvh2::Vec3<double>(1.0, 0.0, 0.0),
+                            bvh2::Vec3<double>(0.0, 1.0, 0.0));
 
     tf::Executor executor(std::thread::hardware_concurrency());
     auto nodes = bvh2::buildLBVH<uint64_t>(executor, primitives);
 
-    bvh2::RayD ray(Vec3<double>(-1.0, 0.2, 0.0), Vec3<double>(1.0, 0.0, 0.0));
+    bvh2::RayD ray(bvh2::Vec3<double>(-1.0, 0.2, 0.0),
+                   bvh2::Vec3<double>(1.0, 0.0, 0.0));
     uint32_t hitIndex = 0;
     double hitT = 0.0;
     bool hit = bvh2::traverseBVHClosestHit(nodes, primitives, ray, hitIndex, hitT);
@@ -144,12 +146,12 @@ int main()
     std::vector<float> y = {0.3f, 0.5f, 0.9f};
     std::vector<float> z = {0.2f, 0.7f, 0.6f};
 
-    Box<float> box;
-    for (size_t i = 0; i < x.size(); ++i) box.expand(Vec3<float>(x[i], y[i], z[i]));
+    bvh2::Box<float> box;
+    for (size_t i = 0; i < x.size(); ++i) box.expand(bvh2::Vec3<float>(x[i], y[i], z[i]));
 
     std::vector<uint64_t> keys(x.size());
     tf::Executor executor(std::thread::hardware_concurrency());
-    computeSfcKeys(x.data(), y.data(), z.data(), keys.data(), keys.size(), box, executor);
+    bvh2::computeSfcKeys(x.data(), y.data(), z.data(), keys.data(), keys.size(), box, executor);
     std::sort(keys.begin(), keys.end());
 
     cstone::Octree<uint64_t> octree(16);
@@ -179,7 +181,7 @@ int main()
     std::vector<float> x = {0.1f, 0.5f, 0.9f};
     std::vector<float> y = {0.2f, 0.4f, 0.8f};
 
-    Box2D<float> box;
+    bvh2::Box2D<float> box;
     for (size_t i = 0; i < x.size(); ++i) box.expand({x[i], y[i]});
 
     std::vector<uint64_t> keys(x.size());
