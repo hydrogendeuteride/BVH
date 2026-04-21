@@ -526,6 +526,96 @@ inline bool traverseBVHClosestHit(const std::vector<BVHNodeT<Scalar>> &nodes,
     return hit;
 }
 
+template<typename Scalar>
+inline bool traverseBVHClosestNodeHit(const std::vector<BVHNodeT<Scalar>> &nodes,
+                                      const RayT<Scalar> &ray,
+                                      uint32_t maxDepth,
+                                      uint32_t &outNodeIdx,
+                                      Scalar &outT)
+{
+    if (nodes.empty())
+    {
+        return false;
+    }
+
+    struct StackEntry
+    {
+        uint32_t nodeIdx;
+        uint32_t depth;
+    };
+
+    bool hit = false;
+    Scalar closestT = ray.tmax;
+    uint32_t closestIdx = 0;
+
+    std::vector<StackEntry> stack;
+    stack.reserve(64);
+    stack.push_back({0, 0});
+
+    while (!stack.empty())
+    {
+        const StackEntry entry = stack.back();
+        stack.pop_back();
+
+        const BVHNodeT<Scalar> &node = nodes[entry.nodeIdx];
+
+        Scalar nodeNear, nodeFar;
+        if (!intersectRayAABB<Scalar>(ray, node.bounds, ray.tmin, closestT, nodeNear, nodeFar))
+        {
+            continue;
+        }
+
+        if (node.isLeaf || entry.depth >= maxDepth)
+        {
+            if (nodeNear < closestT)
+            {
+                closestT = nodeNear;
+                closestIdx = entry.nodeIdx;
+                hit = true;
+            }
+            continue;
+        }
+
+        const BVHNodeT<Scalar> &left = nodes[node.left_idx];
+        const BVHNodeT<Scalar> &right = nodes[node.right_idx];
+
+        Scalar leftNear, leftFar;
+        Scalar rightNear, rightFar;
+        bool hitLeft = intersectRayAABB<Scalar>(ray, left.bounds, ray.tmin, closestT, leftNear, leftFar);
+        bool hitRight = intersectRayAABB<Scalar>(ray, right.bounds, ray.tmin, closestT, rightNear, rightFar);
+
+        if (hitLeft && hitRight)
+        {
+            if (leftNear < rightNear)
+            {
+                stack.push_back({node.right_idx, entry.depth + 1});
+                stack.push_back({node.left_idx, entry.depth + 1});
+            }
+            else
+            {
+                stack.push_back({node.left_idx, entry.depth + 1});
+                stack.push_back({node.right_idx, entry.depth + 1});
+            }
+        }
+        else if (hitLeft)
+        {
+            stack.push_back({node.left_idx, entry.depth + 1});
+        }
+        else if (hitRight)
+        {
+            stack.push_back({node.right_idx, entry.depth + 1});
+        }
+    }
+
+    if (hit)
+    {
+        outNodeIdx = closestIdx;
+        outT = closestT;
+    }
+
+    return hit;
+}
+
 } // namespace bvh2
 
 #endif //BVH2_BVH_H
