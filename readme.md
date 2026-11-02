@@ -1,11 +1,14 @@
 # BVH2
 
-Fast C++17 header-only library for LBVH, octree, and quadtree construction with Taskflow
+Fast C++17 header-only library for LBVH, SAH BVH, octree, and quadtree construction with Taskflow
 parallelism.
 
 ## Features
 
 - LBVH build for `TriangleT<Scalar>` primitives (`bvh2::Primitive`, `bvh2::PrimitiveD`)
+- SAH BVH build: `bvh2::buildSAHBVH(executor, primitives)`
+- Closest-hit ray traversal: `bvh2::traverseBVHClosestHit`
+- Multi-bounce reflection tracing: `bvh2::traceBVHReflections` (`bvh/Reflection.h`)
 - Deterministic LBVH behavior for duplicated Morton codes (tie-break by primitive index)
 - Selectable Morton sort backend: `bvh2::MortonSortMethod::StdSort` or `RadixSort`
 - Traversal helpers:
@@ -92,7 +95,7 @@ int main()
 
     bvh2::traverseBVH(nodes, [](uint32_t idx, const bvh2::BVHNode& node) {
         (void)idx;
-        return !node.isLeaf; // return false to prune subtree
+        return !node.isLeaf(); // return false to prune subtree
     });
 
     bvh2::Ray ray(bvh2::Vec3<float>(-1.0f, 0.2f, 0.0f),
