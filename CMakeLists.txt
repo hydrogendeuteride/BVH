@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.15)
 project(BVH2 LANGUAGES CXX)
 
 option(BVH2_ENABLE_TESTS "Build BVH2 tests" ON)
+option(BVH2_ENABLE_BENCHMARKS "Build external comparison benchmarks" OFF)
 option(BVH2_ENABLE_OPENMP "Enable OpenMP for test/perf targets if available" OFF)
 option(BVH2_ENABLE_AVX2 "Enable AVX2 for test/perf targets if the compiler supports it" OFF)
 option(BVH2_USE_LOCAL_TASKFLOW "Use bundled taskflow headers from this repository" ON)
@@ -67,4 +68,8 @@ if(BVH2_ENABLE_TESTS)
     enable_testing()
 
     add_subdirectory(test)
+endif()
+
+if(BVH2_ENABLE_BENCHMARKS)
+    add_subdirectory(benchmarks)
 endif()

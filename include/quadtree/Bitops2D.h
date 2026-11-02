@@ -44,7 +44,7 @@ template<typename KeyType>
 inline unsigned qtTreeLevel(KeyType codeRange)
 {
 //    assert(isPowerOf4(codeRange));
-    return (bvh2::countLeadingZeros(static_cast<uint64_t>(codeRange - 1)) - unusedBits2D<KeyType>{}) / 2;
+    return (bvh2::countLeadingZeros(KeyType(codeRange - 1)) - unusedBits2D<KeyType>{}) / 2;
 }
 
 template<typename KeyType>
@@ -73,7 +73,7 @@ inline KeyType encodePlaceholderBit2D(KeyType code, int prefixLength)
 template<typename KeyType>
 inline unsigned decodePrefixLength2D(KeyType code)
 {
-    return 8 * sizeof(KeyType) - 1 - bvh2::countLeadingZeros(static_cast<uint64_t>(code));
+    return 8 * sizeof(KeyType) - 1 - bvh2::countLeadingZeros(code);
 }
 
 template<typename KeyType>
@@ -88,7 +88,7 @@ inline KeyType decodePlaceholderBit2D(KeyType code)
 template<typename KeyType>
 inline int commonPrefix2D(KeyType key1, KeyType key2)
 {
-    return int(bvh2::countLeadingZeros(static_cast<uint64_t>(key1 ^ key2))) - unusedBits2D<KeyType>{};
+    return int(bvh2::countLeadingZeros(KeyType(key1 ^ key2))) - unusedBits2D<KeyType>{};
 }
 
 #endif // BVH2_BITOPS2D_H

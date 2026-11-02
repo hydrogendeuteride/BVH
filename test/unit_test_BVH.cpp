@@ -52,30 +52,24 @@ protected:
     {
         if (nodes.empty()) return true;
 
-        for (size_t i = 0; i < nodes.size(); i++)
+        std::vector<bool> visited(nodes.size(), false);
+        std::vector<uint32_t> pending{0};
+        while (!pending.empty())
         {
-            const BVHNode &node = nodes[i];
-
-            if (!node.isLeaf)
+            const uint32_t i = pending.back(); pending.pop_back();
+            if (i >= nodes.size() || visited[i]) return false;
+            visited[i] = true;
+            const auto& node = nodes[i];
+            if (!node.isLeaf())
             {
-                if (node.left_idx >= nodes.size() || node.right_idx >= nodes.size())
-                {
-                    return false;
-                }
-
-                if (nodes[node.left_idx].parent_idx != i || nodes[node.right_idx].parent_idx != i)
-                {
-                    return false;
-                }
-
+                if (node.left_idx >= nodes.size() || node.right_idx() >= nodes.size()) return false;
                 if (!contains(node.bounds, nodes[node.left_idx].bounds) ||
-                    !contains(node.bounds, nodes[node.right_idx].bounds))
-                {
-                    return false;
-                }
+                    !contains(node.bounds, nodes[node.right_idx()].bounds)) return false;
+                pending.push_back(node.left_idx);
+                pending.push_back(node.right_idx());
             }
         }
-        return true;
+        return std::all_of(visited.begin(), visited.end(), [](bool v) { return v; });
     }
 
     bool validateBoundingBoxes(const std::vector<BVHNode> &nodes, const std::vector<Primitive> &primitives)
@@ -84,7 +78,7 @@ protected:
 
         for (const auto &node: nodes)
         {
-            if (node.isLeaf)
+            if (node.isLeaf())
             {
                 if (node.object_idx >= primitives.size())
                 {
@@ -109,10 +103,10 @@ protected:
         {
             const BVHNode &node = nodes[i];
 
-            if (!node.isLeaf)
+            if (!node.isLeaf())
             {
                 const BVHNode &leftChild = nodes[node.left_idx];
-                const BVHNode &rightChild = nodes[node.right_idx];
+                const BVHNode &rightChild = nodes[node.right_idx()];
 
                 BoundingBox unionBox;
                 for (int j = 0; j < 3; j++)
@@ -165,7 +159,7 @@ TEST_F(BVHTest, SinglePrimitive)
     auto nodes = buildLBVH(executor, primitives);
 
     EXPECT_EQ(nodes.size(), 1);
-    EXPECT_TRUE(nodes[0].isLeaf);
+    EXPECT_TRUE(nodes[0].isLeaf());
     EXPECT_EQ(nodes[0].object_idx, 0u);
 
     for (int i = 0; i < 3; i++)
@@ -191,9 +185,9 @@ TEST_F(BVHTest, SimpleCase)
 
     EXPECT_EQ(nodes.size(), 3);
 
-    EXPECT_FALSE(nodes[0].isLeaf);
-    EXPECT_TRUE(nodes[1].isLeaf);
-    EXPECT_TRUE(nodes[2].isLeaf);
+    EXPECT_FALSE(nodes[0].isLeaf());
+    EXPECT_TRUE(nodes[1].isLeaf());
+    EXPECT_TRUE(nodes[2].isLeaf());
 
     EXPECT_TRUE(validateBoundingBoxes(nodes, primitives));
     EXPECT_TRUE(validateBVHStructure(nodes));
@@ -272,24 +266,8 @@ TEST_F(BVHTest, AllPrimitivesAtSamePosition)
 
     EXPECT_EQ(nodes.size(), 2 * count - 1);
 
-    if (!validateBVHStructure(nodes))
-    {
-        std::cout << "WARNING: Structure validation failed for identical primitives. "
-                  << "This is a known limitation for primitives with identical Morton codes." << std::endl;
-
-        for (int i = 0; i < count; i++)
-        {
-            int leafIdx = count - 1 + i;
-            EXPECT_TRUE(nodes[leafIdx].isLeaf);
-
-            uint32_t parentIdx = nodes[leafIdx].parent_idx;
-            EXPECT_LT(parentIdx, nodes.size());
-        }
-    }
-    else
-    {
-        std::cout << "Structure validation passed for identical primitives." << std::endl;
-    }
+    EXPECT_TRUE(validateBVHStructure(nodes));
+    EXPECT_TRUE(validateBoundingBoxes(nodes, primitives));
 }
 
 TEST_F(BVHTest, RayTraversalMissesBVH)
@@ -393,4 +371,57 @@ TEST_F(BVHTest, BuildLBVHWithDifferentSortMethods)
     EXPECT_EQ(nodesStd.size(), nodesRadix.size());
     EXPECT_TRUE(validateBVHStructure(nodesStd));
     EXPECT_TRUE(validateBVHStructure(nodesRadix));
+}
+
+TEST_F(BVHTest, BuildersUseEveryNodeAndPrimitiveOnce)
+{
+    tf::Executor executor(4);
+    for (int count : {0, 1, 2, 3, 9, 128, 4096}) {
+        const auto primitives = generateRandomPrimitives(count);
+        for (const auto& nodes : {buildSAHBVH(executor, primitives),
+                                 buildLBVH<uint32_t>(executor, primitives),
+                                 buildLBVH<uint64_t>(executor, primitives),
+                                 buildLBVH<uint64_t>(executor, primitives, MortonSortMethod::RadixSort)}) {
+            ASSERT_EQ(nodes.size(), count ? 2u * count - 1 : 0u);
+            ASSERT_TRUE(validateBVHStructure(nodes));
+            ASSERT_TRUE(validateBoundingBoxes(nodes, primitives));
+            std::vector<unsigned> seen(count, 0);
+            traverseBVH(nodes, [&](uint32_t, const BVHNode& node) {
+                if (node.isLeaf()) ++seen.at(node.object_idx);
+            });
+            for (auto visits : seen) EXPECT_EQ(visits, 1u);
+        }
+    }
+}
+
+TEST_F(BVHTest, ClosestHitMatchesBruteForce)
+{
+    auto check = [](auto scalar) {
+        using S = decltype(scalar);
+        using V = Vec3<S>;
+        std::vector<PrimitiveT<S>> triangles;
+        for (int i = 0; i < 33; ++i)
+            triangles.emplace_back(V(i, -1, -1), V(i, 1, -1), V(i, 0, 1));
+        tf::Executor executor(2);
+        for (const auto& nodes : {buildSAHBVH(executor, triangles), buildLBVH(executor, triangles)}) {
+        for (S dx : {S(-1), S(0), std::numeric_limits<S>::denorm_min(), S(1)})
+            for (S dy : {S(0), S(.01), S(2)}) for (S start : {S(-1), S(16), S(34)}) {
+                RayT<S> ray(V(start, 0, 0), V(dx, dy, S(.001)), S(0), S(1));
+                bool expected = false;
+                S nearest = ray.tmax;
+                for (const auto& triangle : triangles) {
+                    S t;
+                    if (intersectRayPrimitive(ray, triangle, ray.tmin, nearest, t)) {
+                        expected = true; nearest = t;
+                    }
+                }
+                uint32_t id = UINT32_MAX;
+                S t = -1;
+                ASSERT_EQ(traverseBVHClosestHit(nodes, triangles, ray, id, t), expected);
+                if (expected) { EXPECT_EQ(t, nearest); EXPECT_LT(id, triangles.size()); }
+            }
+        }
+    };
+    check(float{});
+    check(double{});
 }

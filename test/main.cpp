@@ -77,22 +77,13 @@ void exampleUsage()
             std::cout << " (" << (bvh[node.left_idx].object_idx == 0xFFFFFFFF ? "Internal" : "Leaf") << ")"
                       << std::endl;
 
-            std::cout << "  Right child: " << node.right_idx;
-            std::cout << " (" << (bvh[node.right_idx].object_idx == 0xFFFFFFFF ? "Internal" : "Leaf") << ")"
+            std::cout << "  Right child: " << node.right_idx();
+            std::cout << " (" << (bvh[node.right_idx()].object_idx == 0xFFFFFFFF ? "Internal" : "Leaf") << ")"
                       << std::endl;
         }
         else
         {
             std::cout << "  Object index: " << node.object_idx << std::endl;
-        }
-
-        if (i > 0 || node.parent_idx != 0)
-        {
-            std::cout << "  Parent: " << node.parent_idx << std::endl;
-        }
-        else
-        {
-            std::cout << "  Parent: None (Root)" << std::endl;
         }
 
         float volume = (node.bounds.max[0] - node.bounds.min[0]) *
@@ -123,7 +114,7 @@ void exampleUsage()
         {
             std::cout << "Node " << nodeIdx << " (Internal)" << std::endl;
             printTreeRecursive(node.left_idx, depth + 1);
-            printTreeRecursive(node.right_idx, depth + 1);
+            printTreeRecursive(node.right_idx(), depth + 1);
         }
         else
         {
@@ -163,7 +154,7 @@ void exampleUsage()
         else
         {
             analyzeNode(node.left_idx, depth + 1);
-            analyzeNode(node.right_idx, depth + 1);
+            analyzeNode(node.right_idx(), depth + 1);
         }
     };
 

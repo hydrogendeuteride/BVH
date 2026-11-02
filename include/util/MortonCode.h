@@ -33,10 +33,13 @@ inline T expandBits(uint32_t v)
     }
     else
     {
-        result = (result * 0x0001000100010001ULL) & 0xFF0000FF0000FFULL;
-        result = (result * 0x0000010100000101ULL) & 0x0F00F00F00F00F0FULL;
-        result = (result * 0x0000000100000001ULL) & 0xC30C30C30C30C30CULL;
-        result = (result * 0x0000000500000005ULL) & 0x4924924949249249ULL;
+        // Spread the low 21 coordinate bits into positions 0, 3, ..., 60.
+        result &= 0x1FFFFFULL;
+        result = (result | (result << 32)) & 0x001F00000000FFFFULL;
+        result = (result | (result << 16)) & 0x001F0000FF0000FFULL;
+        result = (result | (result << 8)) & 0x100F00F00F00F00FULL;
+        result = (result | (result << 4)) & 0x10C30C30C30C30C3ULL;
+        result = (result | (result << 2)) & 0x1249249249249249ULL;
     }
 
     return result;

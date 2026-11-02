@@ -1,7 +1,7 @@
 #ifndef RAY_H
 #define RAY_H
 
-#include "Box.h"
+#include "BoundingBox.h"
 #include <limits>
 #include <algorithm>
 #include <cmath>
@@ -51,56 +51,95 @@ inline Vec3<Scalar> cross(const Vec3<Scalar> &a, const Vec3<Scalar> &b)
     );
 }
 
-template<typename Scalar>
-inline bool intersectRayAABB(const RayT<Scalar> &ray,
-                             const Box<Scalar> &box,
-                             Scalar tmin, Scalar tmax,
-                             Scalar &tNear, Scalar &tFar)
+namespace detail
 {
-    if (!(tmin <= tmax) || !std::isfinite(tmin) || !std::isfinite(tmax))
+// Local to a traversal: RayT stays mutable and never carries a stale cache.
+template<typename Scalar>
+struct PreparedRayT
+{
+    RayT<Scalar> ray;
+    Vec3<Scalar> inverseDirection;
+    bool valid = true;
+    bool regular = true;
+
+    explicit PreparedRayT(const RayT<Scalar>& source) : ray(source)
     {
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            if (!std::isfinite(ray.origin[axis]) || !std::isfinite(ray.direction[axis]))
+            {
+                valid = false;
+                return;
+            }
+            inverseDirection[axis] = ray.direction[axis] == Scalar(0)
+                    ? Scalar(0) : Scalar(1) / ray.direction[axis];
+            regular = regular && ray.direction[axis] != Scalar(0) && std::isfinite(inverseDirection[axis]);
+        }
+    }
+};
+
+template<typename Scalar>
+inline bool intersectPreparedRayAABB(const PreparedRayT<Scalar>& prepared,
+                                     const Box<Scalar>& box,
+                                     Scalar tmin, Scalar tmax,
+                                     Scalar& tNear, Scalar& tFar)
+{
+    if (!prepared.valid || !(tmin <= tmax) || !std::isfinite(tmin) || !std::isfinite(tmax))
         return false;
+
+    if (prepared.regular)
+    {
+        Vec3<Scalar> lower, upper;
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            if (!std::isfinite(box.min[axis]) || !std::isfinite(box.max[axis])) return false;
+            const Scalar a = (box.min[axis] - prepared.ray.origin[axis]) * prepared.inverseDirection[axis];
+            const Scalar b = (box.max[axis] - prepared.ray.origin[axis]) * prepared.inverseDirection[axis];
+            lower[axis] = std::min(a, b);
+            upper[axis] = std::max(a, b);
+        }
+        tNear = std::max(tmin, std::max(lower.x, std::max(lower.y, lower.z)));
+        tFar = std::min(tmax, std::min(upper.x, std::min(upper.y, upper.z)));
+        return tNear <= tFar;
     }
 
     tNear = tmin;
     tFar = tmax;
-
     for (int axis = 0; axis < 3; ++axis)
     {
-        const Scalar origin = ray.origin[axis];
-        const Scalar direction = ray.direction[axis];
+        const Scalar origin = prepared.ray.origin[axis];
+        const Scalar direction = prepared.ray.direction[axis];
         const Scalar boxMin = box.min[axis];
         const Scalar boxMax = box.max[axis];
-
-        if (!std::isfinite(origin) || !std::isfinite(direction) ||
-            !std::isfinite(boxMin) || !std::isfinite(boxMax))
-        {
-            return false;
-        }
-
-        // Parallel slab: avoid inf*0 (NaN) by handling zero direction explicitly.
+        if (!std::isfinite(boxMin) || !std::isfinite(boxMax)) return false;
+        // Keep exactly parallel rays out of the reciprocal arithmetic.
         if (direction == Scalar(0))
         {
-            if (origin < boxMin || origin > boxMax)
-            {
-                return false;
-            }
+            if (origin < boxMin || origin > boxMax) return false;
             continue;
         }
-
-        Scalar invD = Scalar(1) / direction;
-        Scalar t0 = (boxMin - origin) * invD;
-        Scalar t1 = (boxMax - origin) * invD;
-
+        const Scalar invD = prepared.inverseDirection[axis];
+        // A nonzero subnormal direction can have an infinite reciprocal.
+        const Scalar deltaMin = boxMin - origin, deltaMax = boxMax - origin;
+        Scalar t0 = std::isfinite(invD) ? deltaMin * invD : deltaMin / direction;
+        Scalar t1 = std::isfinite(invD) ? deltaMax * invD : deltaMax / direction;
         if (t0 > t1) std::swap(t0, t1);
-
         tNear = std::max(tNear, t0);
         tFar = std::min(tFar, t1);
-
         if (tNear > tFar) return false;
     }
-
     return tFar >= tNear;
+}
+} // namespace detail
+
+template<typename Scalar>
+inline bool intersectRayAABB(const RayT<Scalar>& ray,
+                             const Box<Scalar>& box,
+                             Scalar tmin, Scalar tmax,
+                             Scalar& tNear, Scalar& tFar)
+{
+    return detail::intersectPreparedRayAABB(detail::PreparedRayT<Scalar>(ray), box,
+                                           tmin, tmax, tNear, tFar);
 }
 
 // Convenience overloads for default float-based types
@@ -122,15 +161,22 @@ inline bool intersectRayTriangle(const RayT<Scalar> &ray,
                                  Scalar tmin, Scalar tmax,
                                  Scalar &tHit)
 {
-    const Scalar eps = static_cast<Scalar>(1e-8);
-
     Vec3<Scalar> edge1 = v1 - v0;
     Vec3<Scalar> edge2 = v2 - v0;
 
     Vec3<Scalar> pvec = cross(ray.direction, edge2);
     Scalar det = dot(edge1, pvec);
 
-    if (std::abs(det) < eps)
+    // Scale the tolerance with the determinant's six product terms. A fixed
+    // epsilon incorrectly rejects small triangles or short direction vectors.
+    // Summing magnitudes before subtraction also accounts for cancellation.
+    const Scalar detScale =
+            std::abs(edge1.x) * (std::abs(ray.direction.y * edge2.z) + std::abs(ray.direction.z * edge2.y)) +
+            std::abs(edge1.y) * (std::abs(ray.direction.z * edge2.x) + std::abs(ray.direction.x * edge2.z)) +
+            std::abs(edge1.z) * (std::abs(ray.direction.x * edge2.y) + std::abs(ray.direction.y * edge2.x));
+    const Scalar detTolerance = Scalar(8) * std::numeric_limits<Scalar>::epsilon() * detScale;
+
+    if (!std::isfinite(det) || std::abs(det) <= detTolerance)
     {
         return false;
     }

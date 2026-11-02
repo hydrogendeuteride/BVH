@@ -276,3 +276,52 @@ TEST(Quadtree2D, TraversalVisitsAllNodes)
     visited.erase(std::unique(visited.begin(), visited.end()), visited.end());
     EXPECT_EQ(static_cast<TreeNodeIndex>(visited.size()), view.numNodes);
 }
+
+TEST(Quadtree2D, KeyWidths)
+{
+    tf::Executor ex(2);
+    auto check = [&](auto keyType) {
+        using K = decltype(keyType);
+        const K range = nodeRange2D<K>(0);
+        EXPECT_EQ(qtTreeLevel<K>(range), 0u);
+        EXPECT_EQ(decodePrefixLength2D<K>(K(1)), 0u);
+        EXPECT_EQ(commonPrefix2D<K>(K(0), range / 2), 0);
+        std::vector<K> keys{0, range / 4, range / 2, 3 * (range / 4)};
+        qtree2d::Quadtree<K> tree(1);
+        tree.build(keys.data(), keys.data() + keys.size(), ex);
+        const auto view = tree.view();
+        ASSERT_EQ(view.numNodes, 5);
+        unsigned visited = 0;
+        qtree2d::traverseQuadtree(view, [&](TreeNodeIndex idx, K key, unsigned level) {
+            EXPECT_EQ(level, idx == 0 ? 0u : 1u);
+            EXPECT_EQ(key, idx == 0 ? K(0) : keys.at(idx - 1));
+            ++visited;
+        });
+        EXPECT_EQ(visited, 5u);
+        EXPECT_EQ(tree.counts(), (std::vector<unsigned>{1, 1, 1, 1}));
+    };
+    check(uint32_t{});
+    check(uint64_t{});
+}
+
+TEST(Quadtree2D, CoordinateBoundaries)
+{
+    auto check = [](auto keyType, auto scalar) {
+        using K = decltype(keyType);
+        using T = decltype(scalar);
+        constexpr unsigned grid = 1u << maxTreeLevel2D<K>();
+        for (T origin : {T(0), T(-1), T(100)}) {
+            const Box2D<T> box({origin, origin}, {origin + 1, origin + 1});
+            for (T x : {T(-.5), T(0), T(.5), T(1), T(1.5)})
+                for (T y : {T(-.5), T(0), T(.5), T(1), T(1.5)}) {
+                    const auto [ix, iy] = decodeHilbert2D(hilbert2D<K>(origin + x, origin + y, box));
+                    EXPECT_EQ(ix, x <= 0 ? 0u : x >= 1 ? grid - 1 : grid / 2);
+                    EXPECT_EQ(iy, y <= 0 ? 0u : y >= 1 ? grid - 1 : grid / 2);
+                }
+        }
+    };
+    check(uint32_t{}, float{});
+    check(uint32_t{}, double{});
+    check(uint64_t{}, float{});
+    check(uint64_t{}, double{});
+}

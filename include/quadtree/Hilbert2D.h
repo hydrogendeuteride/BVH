@@ -2,6 +2,7 @@
 #define BVH2_HILBERT2D_H
 
 #include <tuple>
+#include <algorithm>
 #include <type_traits>
 #include <cassert>
 #include <cmath>
@@ -97,15 +98,12 @@ inline bvh2::IBox2D<KeyType> hilbertIBox2D(KeyType keyStart, unsigned level) noe
 template<typename KeyType, typename T>
 inline KeyType hilbert2D(T x, T y, T xmin, T ymin, T mx, T my)
 {
-    constexpr int mcoord = (1u << maxTreeLevel2D<KeyType>()) - 1;
-
-    int ix = int(std::floor(x * mx)) - int(std::floor(xmin * mx));
-    int iy = int(std::floor(y * my)) - int(std::floor(ymin * my));
-
-    ix = std::min(ix, mcoord); iy = std::min(iy, mcoord);
-    ix = std::max(ix, 0);      iy = std::max(iy, 0);
-
-    return iHilbert2D<KeyType>(unsigned(ix), unsigned(iy));
+    constexpr unsigned mcoord = (1u << maxTreeLevel2D<KeyType>()) - 1;
+    const auto quantize = [](T value, T origin, T scale) {
+        const double coordinate = std::floor((double(value) - double(origin)) * double(scale));
+        return unsigned(std::clamp(coordinate, 0.0, double(mcoord)));
+    };
+    return iHilbert2D<KeyType>(quantize(x, xmin, mx), quantize(y, ymin, my));
 }
 
 template<typename KeyType, typename T>

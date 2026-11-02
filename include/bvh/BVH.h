@@ -1,14 +1,15 @@
 #ifndef BVH2_BVH_H
 #define BVH2_BVH_H
 
-#include "util/BoundingBox.h"
+#include "BVHNode.h"
+#include "SAH.h"
 #include "util/MortonCode.h"
 #include "util/ParallelRadixSort.h"
 #include "util/Bitops.h"
 #include "util/ray.h"
-#include "util/Triangle.h"
 #include <taskflow/taskflow.hpp>
 #include <taskflow/algorithm/for_each.hpp>
+#include <array>
 #include <vector>
 #include <algorithm>
 #include <limits>
@@ -18,28 +19,6 @@
 namespace bvh2
 {
 
-template<typename Scalar>
-using PrimitiveT = TriangleT<Scalar>;
-
-using Primitive = PrimitiveT<float>;
-using PrimitiveF = PrimitiveT<float>;
-using PrimitiveD = PrimitiveT<double>;
-
-template<typename Scalar>
-struct BVHNodeT
-{
-    Box<Scalar> bounds;
-    uint32_t object_idx;      //leaf nodes: index of the primitive; internal node: 0xFFFFFFFF
-    uint32_t left_idx;
-    uint32_t right_idx;
-    uint32_t parent_idx;
-    bool isLeaf;
-};
-
-using BVHNode = BVHNodeT<float>;
-using BVHNodeF = BVHNodeT<float>;
-using BVHNodeD = BVHNodeT<double>;
-
 enum class MortonSortMethod
 {
     StdSort,
@@ -48,6 +27,29 @@ enum class MortonSortMethod
 
 namespace detail
 {
+
+template<typename T, std::size_t Capacity = 64>
+class TraversalStack
+{
+    std::array<T, Capacity> local_;
+    std::size_t localSize_ = 0;
+    std::vector<T> overflow_;
+public:
+    bool empty() const { return localSize_ == 0 && overflow_.empty(); }
+    void push(const T& value)
+    {
+        if (localSize_ < Capacity) local_[localSize_++] = value;
+        else overflow_.push_back(value);
+    }
+    T pop()
+    {
+        if (overflow_.empty()) return local_[--localSize_];
+        T value = overflow_.back();
+        overflow_.pop_back();
+        return value;
+    }
+};
+
 
 template<typename MortonCodeType>
 inline int commonPrefixWithTieBreak(const std::vector<MortonPrimitive<MortonCodeType>> &mortonPrimitives,
@@ -96,7 +98,7 @@ inline void computeBoundsPostOrder(std::vector<BVHNodeT<Scalar>> &nodes, uint32_
         auto [nodeIdx, visited] = stack.back();
         stack.pop_back();
 
-        if (nodeIdx >= numInternalNodes)
+        if (nodes[nodeIdx].isLeaf())
         {
             continue;
         }
@@ -105,13 +107,13 @@ inline void computeBoundsPostOrder(std::vector<BVHNodeT<Scalar>> &nodes, uint32_
         if (!visited)
         {
             stack.emplace_back(nodeIdx, true);
-            stack.emplace_back(node.right_idx, false);
+            stack.emplace_back(node.right_idx(), false);
             stack.emplace_back(node.left_idx, false);
             continue;
         }
 
         const BVHNodeT<Scalar> &leftChild = nodes[node.left_idx];
-        const BVHNodeT<Scalar> &rightChild = nodes[node.right_idx];
+        const BVHNodeT<Scalar> &rightChild = nodes[node.right_idx()];
         mergeChildBounds(node, leftChild, rightChild);
     }
 }
@@ -304,63 +306,46 @@ std::vector<BVHNodeT<Scalar>>
 buildBVH(tf::Executor &executor, const std::vector<PrimitiveT<Scalar>> &primitives,
          const std::vector<MortonPrimitive<MortonCodeType>> &mortonPrimitives)
 {
-    uint32_t numPrimitives = static_cast<uint32_t>(primitives.size());
+    if (primitives.empty()) return {};
+    if (primitives.size() > UINT32_MAX / 2)
+        throw std::runtime_error("BVH node indices exceed uint32 capacity");
 
+    const uint32_t numPrimitives = static_cast<uint32_t>(primitives.size());
+    std::vector<BVHNodeT<Scalar>> nodes(2 * numPrimitives - 1);
     if (numPrimitives == 1)
     {
-        std::vector<BVHNodeT<Scalar>> nodes(1);
-        nodes[0].isLeaf = true;
         nodes[0].object_idx = mortonPrimitives[0].primitiveIndex;
-        nodes[0].bounds = primitives[mortonPrimitives[0].primitiveIndex].bounds;
-        nodes[0].parent_idx = 0;
+        nodes[0].bounds = primitives[nodes[0].object_idx].bounds;
         return nodes;
     }
 
-    uint32_t numInternalNodes = numPrimitives - 1;
-    uint32_t totalNodes = numPrimitives + numInternalNodes;
-
-    std::vector<BVHNodeT<Scalar>> nodes(totalNodes);
-
+    const uint32_t numInternalNodes = numPrimitives - 1;
+    nodes[0].left_idx = 1;
     tf::Taskflow tf;
-
-    auto taskInit = tf.for_each_index(0u, totalNodes, 1u, [&](uint32_t i) {
-        nodes[i].object_idx = (i >= numInternalNodes) ? i - numInternalNodes : 0xFFFFFFFF;
-        nodes[i].parent_idx = 0;
-        nodes[i].isLeaf = (i >= numInternalNodes);
-    });
-
-    auto taskInternal = tf.for_each_index(0u, numInternalNodes, 1u, [&](uint32_t idx) {
-        BVHNodeT<Scalar> &node = nodes[idx];
-
+    auto taskNodes = tf.for_each_index(0u, numInternalNodes, 1u, [&](uint32_t idx) {
         const PrimitiveRange range = determineRange(idx, numPrimitives, mortonPrimitives);
         const uint32_t gamma = findSplit(mortonPrimitives, numPrimitives, range.first, range.last);
+        const uint32_t left = gamma + (range.first == gamma ? numInternalNodes : 0);
+        const uint32_t right = gamma + 1 + (range.last == gamma + 1 ? numInternalNodes : 0);
 
-        node.left_idx = gamma;
-        node.right_idx = gamma + 1;
-
-        if (std::min(range.first, range.last) == gamma) node.left_idx += numInternalNodes;
-        if (std::max(range.first, range.last) == gamma + 1) node.right_idx += numInternalNodes;
-
-        nodes[node.left_idx].parent_idx = idx;
-        nodes[node.right_idx].parent_idx = idx;
+        // Karras internal node idx owns child slots 2*idx+1 and 2*idx+2.
+        // Emit those children directly, without a second node array or remapping pass.
+        auto emit = [&](uint32_t target, uint32_t source) {
+            auto& node = nodes[target];
+            if (source < numInternalNodes) node.left_idx = 2 * source + 1;
+            else {
+                node.object_idx = mortonPrimitives[source - numInternalNodes].primitiveIndex;
+                node.bounds = primitives[node.object_idx].bounds;
+            }
+        };
+        emit(2 * idx + 1, left);
+        emit(2 * idx + 2, right);
     });
-
-    auto taskLeaf = tf.for_each_index(0u, numPrimitives, 1u, [&](uint32_t idx) {
-        BVHNodeT<Scalar> &node = nodes[idx + numInternalNodes];
-        uint32_t pIdx = mortonPrimitives[idx].primitiveIndex;
-        node.object_idx = pIdx;
-        node.bounds = primitives[pIdx].bounds;
-    });
-
     auto taskBounds = tf.emplace([&]() {
         detail::computeBoundsPostOrder(nodes, numInternalNodes);
     });
-
-    taskInit.precede(taskInternal, taskLeaf);
-    taskInternal.precede(taskBounds);
-    taskLeaf.precede(taskBounds);
-
-    executor.run(tf).wait();
+    taskNodes.precede(taskBounds);
+    executor.run(tf).get();
 
     return nodes;
 }
@@ -395,24 +380,22 @@ inline void traverseBVH(const std::vector<BVHNodeT<Scalar>> &nodes, Func &&visit
         return;
     }
 
-    std::vector<uint32_t> stack;
-    stack.reserve(64);
-    stack.push_back(0);
+    detail::TraversalStack<uint32_t> stack;
+    stack.push(0);
 
     using VisitReturn = std::invoke_result_t<Func &, uint32_t, const BVHNodeT<Scalar> &>;
     constexpr bool returnsBool = std::is_same<VisitReturn, bool>::value;
 
     while (!stack.empty())
     {
-        uint32_t idx = stack.back();
-        stack.pop_back();
+        const uint32_t idx = stack.pop();
 
         const BVHNodeT<Scalar> &node = nodes[idx];
 
         if constexpr (returnsBool)
         {
             bool traverseChildren = visit(idx, node);
-            if (!traverseChildren || node.isLeaf)
+            if (!traverseChildren || node.isLeaf())
             {
                 continue;
             }
@@ -420,14 +403,14 @@ inline void traverseBVH(const std::vector<BVHNodeT<Scalar>> &nodes, Func &&visit
         else
         {
             visit(idx, node);
-            if (node.isLeaf)
+            if (node.isLeaf())
             {
                 continue;
             }
         }
 
-        stack.push_back(node.right_idx);
-        stack.push_back(node.left_idx);
+        stack.push(node.right_idx());
+        stack.push(node.left_idx);
     }
 }
 
@@ -447,74 +430,71 @@ inline bool traverseBVHClosestHit(const std::vector<BVHNodeT<Scalar>> &nodes,
     Scalar closestT = ray.tmax;
     uint32_t closestIdx = 0;
 
-    std::vector<uint32_t> stack;
-    stack.reserve(64);
-    stack.push_back(0);
+    const detail::PreparedRayT<Scalar> prepared(ray);
+    Scalar rootNear, rootFar;
+    if (!detail::intersectPreparedRayAABB(prepared, nodes[0].bounds, ray.tmin, closestT, rootNear, rootFar))
+        return false;
+    struct StackEntry { uint32_t nodeIdx; Scalar nearT; };
+    detail::TraversalStack<StackEntry> stack;
+    uint32_t nodeIdx = 0;
 
-    while (!stack.empty())
+    while (true)
     {
-        uint32_t nodeIdx = stack.back();
-        stack.pop_back();
+        const BVHNodeT<Scalar>& node = nodes[nodeIdx];
 
-        const BVHNodeT<Scalar> &node = nodes[nodeIdx];
-
-        Scalar nodeNear, nodeFar;
-        if (!intersectRayAABB<Scalar>(ray, node.bounds, ray.tmin, closestT, nodeNear, nodeFar))
+        if (node.isLeaf())
         {
-            continue;
-        }
-
-        if (node.isLeaf)
-        {
-            uint32_t primIdx = node.object_idx;
-            if (primIdx >= primitives.size())
-            {
-                continue;
-            }
-
+            const uint32_t primIdx = node.object_idx;
             Scalar tHit;
-            if (intersectRayPrimitive<Scalar>(ray, primitives[primIdx], ray.tmin, closestT, tHit))
+            if (primIdx < primitives.size() &&
+                intersectRayPrimitive<Scalar>(ray, primitives[primIdx], ray.tmin, closestT, tHit) &&
+                (!hit || tHit < closestT))
             {
-                if (tHit < closestT)
-                {
-                    closestT = tHit;
-                    closestIdx = primIdx;
-                    hit = true;
-                }
+                closestT = tHit;
+                closestIdx = primIdx;
+                hit = true;
             }
         }
         else
         {
             const BVHNodeT<Scalar> &left = nodes[node.left_idx];
-            const BVHNodeT<Scalar> &right = nodes[node.right_idx];
+            const BVHNodeT<Scalar> &right = nodes[node.right_idx()];
 
             Scalar leftNear, leftFar;
             Scalar rightNear, rightFar;
-            bool hitLeft = intersectRayAABB<Scalar>(ray, left.bounds, ray.tmin, closestT, leftNear, leftFar);
-            bool hitRight = intersectRayAABB<Scalar>(ray, right.bounds, ray.tmin, closestT, rightNear, rightFar);
+            bool hitLeft = detail::intersectPreparedRayAABB(prepared, left.bounds, ray.tmin, closestT, leftNear, leftFar);
+            bool hitRight = detail::intersectPreparedRayAABB(prepared, right.bounds, ray.tmin, closestT, rightNear, rightFar);
 
             if (hitLeft && hitRight)
             {
                 if (leftNear < rightNear)
                 {
-                    stack.push_back(node.right_idx);
-                    stack.push_back(node.left_idx);
+                    stack.push({node.right_idx(), rightNear});
+                    nodeIdx = node.left_idx;
                 }
                 else
                 {
-                    stack.push_back(node.left_idx);
-                    stack.push_back(node.right_idx);
+                    stack.push({node.left_idx, leftNear});
+                    nodeIdx = node.right_idx();
                 }
+                continue;
             }
             else if (hitLeft)
             {
-                stack.push_back(node.left_idx);
+                nodeIdx = node.left_idx;
+                continue;
             }
             else if (hitRight)
             {
-                stack.push_back(node.right_idx);
+                nodeIdx = node.right_idx();
+                continue;
             }
         }
+        if (stack.empty()) break;
+        StackEntry next = stack.pop();
+        while (next.nearT > closestT && !stack.empty()) next = stack.pop();
+        if (next.nearT > closestT) break;
+        nodeIdx = next.nodeIdx;
     }
 
     if (hit)
@@ -542,32 +522,30 @@ inline bool traverseBVHClosestNodeHit(const std::vector<BVHNodeT<Scalar>> &nodes
     {
         uint32_t nodeIdx;
         uint32_t depth;
+        Scalar nearT;
     };
 
     bool hit = false;
     Scalar closestT = ray.tmax;
     uint32_t closestIdx = 0;
 
-    std::vector<StackEntry> stack;
-    stack.reserve(64);
-    stack.push_back({0, 0});
+    const detail::PreparedRayT<Scalar> prepared(ray);
+    Scalar rootNear, rootFar;
+    if (!detail::intersectPreparedRayAABB(prepared, nodes[0].bounds, ray.tmin, closestT, rootNear, rootFar))
+        return false;
+    detail::TraversalStack<StackEntry> stack;
+    stack.push({0, 0, rootNear});
 
     while (!stack.empty())
     {
-        const StackEntry entry = stack.back();
-        stack.pop_back();
+        const StackEntry entry = stack.pop();
+        if (entry.nearT > closestT) continue;
+        const BVHNodeT<Scalar>& node = nodes[entry.nodeIdx];
+        const Scalar nodeNear = entry.nearT;
 
-        const BVHNodeT<Scalar> &node = nodes[entry.nodeIdx];
-
-        Scalar nodeNear, nodeFar;
-        if (!intersectRayAABB<Scalar>(ray, node.bounds, ray.tmin, closestT, nodeNear, nodeFar))
+        if (node.isLeaf() || entry.depth >= maxDepth)
         {
-            continue;
-        }
-
-        if (node.isLeaf || entry.depth >= maxDepth)
-        {
-            if (nodeNear < closestT)
+            if (!hit || nodeNear < closestT)
             {
                 closestT = nodeNear;
                 closestIdx = entry.nodeIdx;
@@ -577,33 +555,33 @@ inline bool traverseBVHClosestNodeHit(const std::vector<BVHNodeT<Scalar>> &nodes
         }
 
         const BVHNodeT<Scalar> &left = nodes[node.left_idx];
-        const BVHNodeT<Scalar> &right = nodes[node.right_idx];
+        const BVHNodeT<Scalar> &right = nodes[node.right_idx()];
 
         Scalar leftNear, leftFar;
         Scalar rightNear, rightFar;
-        bool hitLeft = intersectRayAABB<Scalar>(ray, left.bounds, ray.tmin, closestT, leftNear, leftFar);
-        bool hitRight = intersectRayAABB<Scalar>(ray, right.bounds, ray.tmin, closestT, rightNear, rightFar);
+        bool hitLeft = detail::intersectPreparedRayAABB(prepared, left.bounds, ray.tmin, closestT, leftNear, leftFar);
+        bool hitRight = detail::intersectPreparedRayAABB(prepared, right.bounds, ray.tmin, closestT, rightNear, rightFar);
 
         if (hitLeft && hitRight)
         {
             if (leftNear < rightNear)
             {
-                stack.push_back({node.right_idx, entry.depth + 1});
-                stack.push_back({node.left_idx, entry.depth + 1});
+                stack.push({node.right_idx(), entry.depth + 1, rightNear});
+                stack.push({node.left_idx, entry.depth + 1, leftNear});
             }
             else
             {
-                stack.push_back({node.left_idx, entry.depth + 1});
-                stack.push_back({node.right_idx, entry.depth + 1});
+                stack.push({node.left_idx, entry.depth + 1, leftNear});
+                stack.push({node.right_idx(), entry.depth + 1, rightNear});
             }
         }
         else if (hitLeft)
         {
-            stack.push_back({node.left_idx, entry.depth + 1});
+            stack.push({node.left_idx, entry.depth + 1, leftNear});
         }
         else if (hitRight)
         {
-            stack.push_back({node.right_idx, entry.depth + 1});
+            stack.push({node.right_idx(), entry.depth + 1, rightNear});
         }
     }
 
