@@ -52,7 +52,7 @@ void exampleUsage()
     std::cout << "Building LBVH for " << primitives.size() << " primitives..." << std::endl;
 
     tf::Executor executor(std::thread::hardware_concurrency());
-    std::vector<BVHNode> bvh = buildLBVH(executor, primitives);
+    auto bvh = buildLBVH(executor, primitives);
 
     std::cout << "LBVH built successfully with " << bvh.size() << " nodes" << std::endl;
 

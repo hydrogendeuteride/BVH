@@ -130,6 +130,44 @@ inline bool intersectPreparedRayAABB(const PreparedRayT<Scalar>& prepared,
     }
     return tFar >= tNear;
 }
+// Two consecutive siblings share ray validation and per-axis ray loads.
+template<typename Scalar>
+inline unsigned intersectPreparedRayAABBPair(const PreparedRayT<Scalar>& prepared,
+                                             const Box<Scalar>* boxes,
+                                             Scalar tmin, Scalar tmax,
+                                             Scalar& leftNear, Scalar& rightNear)
+{
+    if (!prepared.valid || !(tmin <= tmax) || !std::isfinite(tmin) || !std::isfinite(tmax)) return 0;
+    if (!prepared.regular) {
+        Scalar far;
+        const bool left = intersectPreparedRayAABB(prepared, boxes[0], tmin, tmax, leftNear, far);
+        const bool right = intersectPreparedRayAABB(prepared, boxes[1], tmin, tmax, rightNear, far);
+        return unsigned(left) | (unsigned(right) << 1);
+    }
+    Scalar lower[3][2], upper[3][2];
+    bool valid[2] = {true, true};
+    for (int axis = 0; axis < 3; ++axis) {
+        const Scalar origin = prepared.ray.origin[axis];
+        const Scalar inverse = prepared.inverseDirection[axis];
+        for (int child = 0; child < 2; ++child) {
+            const Scalar minimum = boxes[child].min[axis], maximum = boxes[child].max[axis];
+            valid[child] = valid[child] && std::isfinite(minimum) && std::isfinite(maximum);
+            const Scalar a = (minimum - origin) * inverse;
+            const Scalar b = (maximum - origin) * inverse;
+            lower[axis][child] = std::min(a, b);
+            upper[axis][child] = std::max(a, b);
+        }
+    }
+    Scalar near[2];
+    unsigned mask = 0;
+    for (int child = 0; child < 2; ++child) {
+        near[child] = std::max(tmin, std::max(lower[0][child], std::max(lower[1][child], lower[2][child])));
+        const Scalar far = std::min(tmax, std::min(upper[0][child], std::min(upper[1][child], upper[2][child])));
+        mask |= unsigned(valid[child] && near[child] <= far) << child;
+    }
+    leftNear = near[0]; rightNear = near[1];
+    return mask;
+}
 } // namespace detail
 
 template<typename Scalar>

@@ -21,38 +21,39 @@ struct ReflectionHitT
 };
 
 template<typename Scalar, typename Func>
-uint32_t traceBVHReflections(const std::vector<BVHNodeT<Scalar>> &nodes,
-                             const std::vector<PrimitiveT<Scalar>> &primitives,
-                             RayT<Scalar> ray,
+uint32_t traceBVHReflections(const BVHView<Scalar> &nodes,
+                             const std::vector<PrimitiveT<std::remove_const_t<Scalar>>> &primitives,
+                             RayT<std::remove_const_t<Scalar>> ray,
                              uint32_t maxBounces,
                              Func &&visit,
-                             Scalar relativeOriginOffset = Scalar(32) * std::numeric_limits<Scalar>::epsilon())
+                             std::remove_const_t<Scalar> relativeOriginOffset = std::remove_const_t<Scalar>(32) * std::numeric_limits<std::remove_const_t<Scalar>>::epsilon())
 {
-    Vec3<Scalar> previousPosition = ray.origin;
-    Scalar pathLength = 0;
+    using S = std::remove_const_t<Scalar>;
+    Vec3<S> previousPosition = ray.origin;
+    S pathLength = 0;
     uint32_t completed = 0;
-    using VisitReturn = std::invoke_result_t<Func &, const ReflectionHitT<Scalar> &>;
+    using VisitReturn = std::invoke_result_t<Func &, const ReflectionHitT<S> &>;
 
     for (uint32_t bounce = 0; bounce < maxBounces; ++bounce)
     {
         uint32_t primitiveIndex;
-        Scalar t;
+        S t;
         if (!traverseBVHClosestHit(nodes, primitives, ray, primitiveIndex, t)) break;
 
         const auto &triangle = primitives[primitiveIndex];
         const auto edge1 = triangle.v1 - triangle.v0;
         const auto edge2 = triangle.v2 - triangle.v0;
         auto normal = cross(edge1, edge2);
-        const Scalar normalLength = std::hypot(normal.x, normal.y, normal.z);
-        if (!(normalLength > Scalar(0)) || !std::isfinite(normalLength)) break;
+        const S normalLength = std::hypot(normal.x, normal.y, normal.z);
+        if (!(normalLength > S(0)) || !std::isfinite(normalLength)) break;
         for (int axis = 0; axis < 3; ++axis) normal[axis] /= normalLength;
-        if (dot(ray.direction, normal) > Scalar(0))
+        if (dot(ray.direction, normal) > S(0))
             for (int axis = 0; axis < 3; ++axis) normal[axis] = -normal[axis];
 
-        Vec3<Scalar> position;
-        Vec3<Scalar> reflected;
-        const Scalar twiceProjection = Scalar(2) * dot(ray.direction, normal);
-        Scalar positionScale = 0;
+        Vec3<S> position;
+        Vec3<S> reflected;
+        const S twiceProjection = S(2) * dot(ray.direction, normal);
+        S positionScale = 0;
         for (int axis = 0; axis < 3; ++axis)
         {
             position[axis] = ray.origin[axis] + t * ray.direction[axis];
@@ -61,9 +62,9 @@ uint32_t traceBVHReflections(const std::vector<BVHNodeT<Scalar>> &nodes,
                                       std::abs(edge1[axis]), std::abs(edge2[axis])});
         }
         const auto segment = position - previousPosition;
-        const Scalar segmentLength = std::hypot(segment.x, segment.y, segment.z);
+        const S segmentLength = std::hypot(segment.x, segment.y, segment.z);
         pathLength += segmentLength;
-        const ReflectionHitT<Scalar> hit{primitiveIndex, bounce, position, normal,
+        const ReflectionHitT<S> hit{primitiveIndex, bounce, position, normal,
                                          ray.direction, reflected, segmentLength, pathLength};
         ++completed;
         if constexpr (std::is_same_v<VisitReturn, bool>)
@@ -76,19 +77,28 @@ uint32_t traceBVHReflections(const std::vector<BVHNodeT<Scalar>> &nodes,
         }
 
         previousPosition = position;
-        const Scalar offset = std::max(Scalar(0), relativeOriginOffset) * positionScale;
+        const S offset = std::max(S(0), relativeOriginOffset) * positionScale;
         for (int axis = 0; axis < 3; ++axis)
         {
             ray.origin[axis] = position[axis] + offset * normal[axis];
             // Ensure at least one representable step on each nonzero normal axis.
-            if (normal[axis] != Scalar(0))
+            if (normal[axis] != S(0))
                 ray.origin[axis] = std::nextafter(ray.origin[axis],
-                    std::copysign(std::numeric_limits<Scalar>::infinity(), normal[axis]));
+                    std::copysign(std::numeric_limits<S>::infinity(), normal[axis]));
         }
         ray.direction = reflected;
         ray.tmin = 0;
     }
     return completed;
+}
+
+template<typename Scalar, typename Func>
+uint32_t traceBVHReflections(const BVHData<Scalar>& nodes,
+                             const std::vector<PrimitiveT<Scalar>>& primitives,
+                             RayT<Scalar> ray, uint32_t maxBounces, Func&& visit,
+                             Scalar relativeOriginOffset = Scalar(32) * std::numeric_limits<Scalar>::epsilon()) {
+    return traceBVHReflections(nodes.data(), primitives, ray, maxBounces,
+                               std::forward<Func>(visit), relativeOriginOffset);
 }
 
 } // namespace bvh2

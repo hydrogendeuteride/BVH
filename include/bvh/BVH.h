@@ -70,51 +70,32 @@ inline int commonPrefixWithTieBreak(const std::vector<MortonPrimitive<MortonCode
 }
 
 template<typename Scalar>
-inline void mergeChildBounds(BVHNodeT<Scalar> &parentNode,
-                             const BVHNodeT<Scalar> &leftChild,
-                             const BVHNodeT<Scalar> &rightChild)
+inline void mergeChildBounds(BVHData<Scalar>& nodes, uint32_t idx)
 {
-    for (int axis = 0; axis < 3; ++axis)
-    {
-        parentNode.bounds.min[axis] = std::min(leftChild.bounds.min[axis], rightChild.bounds.min[axis]);
-        parentNode.bounds.max[axis] = std::max(leftChild.bounds.max[axis], rightChild.bounds.max[axis]);
+    const uint32_t left = nodes.childOffsets[idx], right = left + 1;
+    for (int axis = 0; axis < 3; ++axis) {
+        nodes.bounds[idx].min[axis] = std::min(nodes.bounds[left].min[axis], nodes.bounds[right].min[axis]);
+        nodes.bounds[idx].max[axis] = std::max(nodes.bounds[left].max[axis], nodes.bounds[right].max[axis]);
     }
 }
 
 template<typename Scalar>
-inline void computeBoundsPostOrder(std::vector<BVHNodeT<Scalar>> &nodes, uint32_t numInternalNodes)
+inline void computeBoundsPostOrder(BVHData<Scalar>& nodes, uint32_t root)
 {
-    if (numInternalNodes == 0 || nodes.empty())
-    {
-        return;
-    }
-
-    std::vector<std::pair<uint32_t, bool>> stack;
-    stack.reserve(numInternalNodes * 2);
-    stack.emplace_back(0u, false);
-
+    TraversalStack<std::pair<uint32_t, bool>> stack;
+    stack.push({root, false});
     while (!stack.empty())
     {
-        auto [nodeIdx, visited] = stack.back();
-        stack.pop_back();
-
-        if (nodes[nodeIdx].isLeaf())
-        {
-            continue;
+        auto [idx, visited] = stack.pop();
+        if (nodes.primitiveIndices[idx] != UINT32_MAX) continue;
+        const uint32_t left = nodes.childOffsets[idx], right = left + 1;
+        if (!visited) {
+            stack.push({idx, true});
+            stack.push({right, false});
+            stack.push({left, false});
+        } else {
+            mergeChildBounds(nodes, idx);
         }
-
-        BVHNodeT<Scalar> &node = nodes[nodeIdx];
-        if (!visited)
-        {
-            stack.emplace_back(nodeIdx, true);
-            stack.emplace_back(node.right_idx(), false);
-            stack.emplace_back(node.left_idx, false);
-            continue;
-        }
-
-        const BVHNodeT<Scalar> &leftChild = nodes[node.left_idx];
-        const BVHNodeT<Scalar> &rightChild = nodes[node.right_idx()];
-        mergeChildBounds(node, leftChild, rightChild);
     }
 }
 
@@ -302,7 +283,7 @@ std::vector<MortonPrimitive<MortonCodeType>> generateMortonCodes(const std::vect
 }
 
 template<typename MortonCodeType, typename Scalar>
-std::vector<BVHNodeT<Scalar>>
+BVHData<Scalar>
 buildBVH(tf::Executor &executor, const std::vector<PrimitiveT<Scalar>> &primitives,
          const std::vector<MortonPrimitive<MortonCodeType>> &mortonPrimitives)
 {
@@ -311,16 +292,17 @@ buildBVH(tf::Executor &executor, const std::vector<PrimitiveT<Scalar>> &primitiv
         throw std::runtime_error("BVH node indices exceed uint32 capacity");
 
     const uint32_t numPrimitives = static_cast<uint32_t>(primitives.size());
-    std::vector<BVHNodeT<Scalar>> nodes(2 * numPrimitives - 1);
+    BVHData<Scalar> nodes;
+    nodes.resize(2 * numPrimitives - 1);
     if (numPrimitives == 1)
     {
-        nodes[0].object_idx = mortonPrimitives[0].primitiveIndex;
-        nodes[0].bounds = primitives[nodes[0].object_idx].bounds;
+        nodes.primitiveIndices[0] = mortonPrimitives[0].primitiveIndex;
+        nodes.bounds[0] = primitives[nodes.primitiveIndices[0]].bounds;
         return nodes;
     }
 
     const uint32_t numInternalNodes = numPrimitives - 1;
-    nodes[0].left_idx = 1;
+    nodes.childOffsets[0] = 1;
     tf::Taskflow tf;
     auto taskNodes = tf.for_each_index(0u, numInternalNodes, 1u, [&](uint32_t idx) {
         const PrimitiveRange range = determineRange(idx, numPrimitives, mortonPrimitives);
@@ -331,18 +313,39 @@ buildBVH(tf::Executor &executor, const std::vector<PrimitiveT<Scalar>> &primitiv
         // Karras internal node idx owns child slots 2*idx+1 and 2*idx+2.
         // Emit those children directly, without a second node array or remapping pass.
         auto emit = [&](uint32_t target, uint32_t source) {
-            auto& node = nodes[target];
-            if (source < numInternalNodes) node.left_idx = 2 * source + 1;
+            if (source < numInternalNodes) nodes.childOffsets[target] = 2 * source + 1;
             else {
-                node.object_idx = mortonPrimitives[source - numInternalNodes].primitiveIndex;
-                node.bounds = primitives[node.object_idx].bounds;
+                nodes.primitiveIndices[target] = mortonPrimitives[source - numInternalNodes].primitiveIndex;
+                nodes.bounds[target] = primitives[nodes.primitiveIndices[target]].bounds;
             }
         };
         emit(2 * idx + 1, left);
         emit(2 * idx + 2, right);
     });
-    auto taskBounds = tf.emplace([&]() {
-        detail::computeBoundsPostOrder(nodes, numInternalNodes);
+    auto taskBounds = tf.emplace([&](tf::Subflow& sf) {
+        if (executor.num_workers() == 1 || numPrimitives < 4096) {
+            detail::computeBoundsPostOrder(nodes, 0);
+            return;
+        }
+        // Disjoint subtrees need no atomics; merge their ancestors after joining.
+        std::vector<uint32_t> frontier{0};
+        size_t first = 0;
+        while (first < frontier.size() && frontier.size() - first < 4 * executor.num_workers()) {
+            const uint32_t idx = frontier[first++];
+            if (nodes.primitiveIndices[idx] != UINT32_MAX) continue;
+            const uint32_t left = nodes.childOffsets[idx];
+            frontier.push_back(left);
+            frontier.push_back(left + 1);
+        }
+        for (size_t i = first; i < frontier.size(); ++i) {
+            const uint32_t root = frontier[i];
+            sf.emplace([&, root]() { detail::computeBoundsPostOrder(nodes, root); });
+        }
+        sf.join();
+        while (first) {
+            const uint32_t idx = frontier[--first];
+            if (nodes.primitiveIndices[idx] == UINT32_MAX) detail::mergeChildBounds(nodes, idx);
+        }
     });
     taskNodes.precede(taskBounds);
     executor.run(tf).get();
@@ -351,7 +354,7 @@ buildBVH(tf::Executor &executor, const std::vector<PrimitiveT<Scalar>> &primitiv
 }
 
 template<typename MortonCodeType = uint64_t, typename Scalar>
-std::vector<BVHNodeT<Scalar>>
+BVHData<Scalar>
 buildLBVH(tf::Executor &executor,
           const std::vector<PrimitiveT<Scalar>> &primitives,
           MortonSortMethod sortMethod)
@@ -365,7 +368,7 @@ buildLBVH(tf::Executor &executor,
 }
 
 template<typename MortonCodeType = uint64_t, typename Scalar>
-std::vector<BVHNodeT<Scalar>>
+BVHData<Scalar>
 buildLBVH(tf::Executor &executor,
           const std::vector<PrimitiveT<Scalar>> &primitives)
 {
@@ -373,8 +376,9 @@ buildLBVH(tf::Executor &executor,
 }
 
 template<typename Scalar, typename Func>
-inline void traverseBVH(const std::vector<BVHNodeT<Scalar>> &nodes, Func &&visit)
+inline void traverseBVH(const BVHView<Scalar> &nodes, Func &&visit)
 {
+    using S = std::remove_const_t<Scalar>;
     if (nodes.empty())
     {
         return;
@@ -383,14 +387,14 @@ inline void traverseBVH(const std::vector<BVHNodeT<Scalar>> &nodes, Func &&visit
     detail::TraversalStack<uint32_t> stack;
     stack.push(0);
 
-    using VisitReturn = std::invoke_result_t<Func &, uint32_t, const BVHNodeT<Scalar> &>;
+    using VisitReturn = std::invoke_result_t<Func &, uint32_t, const BVHNodeT<S> &>;
     constexpr bool returnsBool = std::is_same<VisitReturn, bool>::value;
 
     while (!stack.empty())
     {
         const uint32_t idx = stack.pop();
 
-        const BVHNodeT<Scalar> &node = nodes[idx];
+        const BVHNodeT<S> &node = nodes[idx];
 
         if constexpr (returnsBool)
         {
@@ -415,39 +419,40 @@ inline void traverseBVH(const std::vector<BVHNodeT<Scalar>> &nodes, Func &&visit
 }
 
 template<typename Scalar>
-inline bool traverseBVHClosestHit(const std::vector<BVHNodeT<Scalar>> &nodes,
-                                  const std::vector<PrimitiveT<Scalar>> &primitives,
-                                  const RayT<Scalar> &ray,
+inline bool traverseBVHClosestHit(const BVHView<Scalar> &nodes,
+                                  const std::vector<PrimitiveT<std::remove_const_t<Scalar>>> &primitives,
+                                  const RayT<std::remove_const_t<Scalar>> &ray,
                                   uint32_t &outPrimitiveIdx,
-                                  Scalar &outT)
+                                  std::remove_const_t<Scalar> &outT)
 {
+    using S = std::remove_const_t<Scalar>;
     if (nodes.empty())
     {
         return false;
     }
 
     bool hit = false;
-    Scalar closestT = ray.tmax;
+    S closestT = ray.tmax;
     uint32_t closestIdx = 0;
 
-    const detail::PreparedRayT<Scalar> prepared(ray);
-    Scalar rootNear, rootFar;
-    if (!detail::intersectPreparedRayAABB(prepared, nodes[0].bounds, ray.tmin, closestT, rootNear, rootFar))
+    const detail::PreparedRayT<S> prepared(ray);
+    S rootNear, rootFar;
+    if (!detail::intersectPreparedRayAABB(prepared, nodes.bounds[0], ray.tmin, closestT, rootNear, rootFar))
         return false;
-    struct StackEntry { uint32_t nodeIdx; Scalar nearT; };
+    struct StackEntry { uint32_t nodeIdx; S nearT; };
     detail::TraversalStack<StackEntry> stack;
     uint32_t nodeIdx = 0;
 
     while (true)
     {
-        const BVHNodeT<Scalar>& node = nodes[nodeIdx];
+        const uint32_t primitiveIndex = nodes.primitiveIndices[nodeIdx];
 
-        if (node.isLeaf())
+        if (primitiveIndex != UINT32_MAX)
         {
-            const uint32_t primIdx = node.object_idx;
-            Scalar tHit;
+            const uint32_t primIdx = primitiveIndex;
+            S tHit;
             if (primIdx < primitives.size() &&
-                intersectRayPrimitive<Scalar>(ray, primitives[primIdx], ray.tmin, closestT, tHit) &&
+                intersectRayPrimitive<S>(ray, primitives[primIdx], ray.tmin, closestT, tHit) &&
                 (!hit || tHit < closestT))
             {
                 closestT = tHit;
@@ -457,36 +462,35 @@ inline bool traverseBVHClosestHit(const std::vector<BVHNodeT<Scalar>> &nodes,
         }
         else
         {
-            const BVHNodeT<Scalar> &left = nodes[node.left_idx];
-            const BVHNodeT<Scalar> &right = nodes[node.right_idx()];
+            const uint32_t left = nodes.childOffsets[nodeIdx], right = left + 1;
 
-            Scalar leftNear, leftFar;
-            Scalar rightNear, rightFar;
-            bool hitLeft = detail::intersectPreparedRayAABB(prepared, left.bounds, ray.tmin, closestT, leftNear, leftFar);
-            bool hitRight = detail::intersectPreparedRayAABB(prepared, right.bounds, ray.tmin, closestT, rightNear, rightFar);
+            S leftNear, rightNear;
+            const unsigned hitMask = detail::intersectPreparedRayAABBPair(
+                prepared, nodes.bounds + left, ray.tmin, closestT, leftNear, rightNear);
+            const bool hitLeft = hitMask & 1, hitRight = hitMask & 2;
 
             if (hitLeft && hitRight)
             {
                 if (leftNear < rightNear)
                 {
-                    stack.push({node.right_idx(), rightNear});
-                    nodeIdx = node.left_idx;
+                    stack.push({right, rightNear});
+                    nodeIdx = left;
                 }
                 else
                 {
-                    stack.push({node.left_idx, leftNear});
-                    nodeIdx = node.right_idx();
+                    stack.push({left, leftNear});
+                    nodeIdx = right;
                 }
                 continue;
             }
             else if (hitLeft)
             {
-                nodeIdx = node.left_idx;
+                nodeIdx = left;
                 continue;
             }
             else if (hitRight)
             {
-                nodeIdx = node.right_idx();
+                nodeIdx = right;
                 continue;
             }
         }
@@ -507,12 +511,13 @@ inline bool traverseBVHClosestHit(const std::vector<BVHNodeT<Scalar>> &nodes,
 }
 
 template<typename Scalar>
-inline bool traverseBVHClosestNodeHit(const std::vector<BVHNodeT<Scalar>> &nodes,
-                                      const RayT<Scalar> &ray,
+inline bool traverseBVHClosestNodeHit(const BVHView<Scalar> &nodes,
+                                      const RayT<std::remove_const_t<Scalar>> &ray,
                                       uint32_t maxDepth,
                                       uint32_t &outNodeIdx,
-                                      Scalar &outT)
+                                      std::remove_const_t<Scalar> &outT)
 {
+    using S = std::remove_const_t<Scalar>;
     if (nodes.empty())
     {
         return false;
@@ -522,16 +527,16 @@ inline bool traverseBVHClosestNodeHit(const std::vector<BVHNodeT<Scalar>> &nodes
     {
         uint32_t nodeIdx;
         uint32_t depth;
-        Scalar nearT;
+        S nearT;
     };
 
     bool hit = false;
-    Scalar closestT = ray.tmax;
+    S closestT = ray.tmax;
     uint32_t closestIdx = 0;
 
-    const detail::PreparedRayT<Scalar> prepared(ray);
-    Scalar rootNear, rootFar;
-    if (!detail::intersectPreparedRayAABB(prepared, nodes[0].bounds, ray.tmin, closestT, rootNear, rootFar))
+    const detail::PreparedRayT<S> prepared(ray);
+    S rootNear, rootFar;
+    if (!detail::intersectPreparedRayAABB(prepared, nodes.bounds[0], ray.tmin, closestT, rootNear, rootFar))
         return false;
     detail::TraversalStack<StackEntry> stack;
     stack.push({0, 0, rootNear});
@@ -540,10 +545,10 @@ inline bool traverseBVHClosestNodeHit(const std::vector<BVHNodeT<Scalar>> &nodes
     {
         const StackEntry entry = stack.pop();
         if (entry.nearT > closestT) continue;
-        const BVHNodeT<Scalar>& node = nodes[entry.nodeIdx];
-        const Scalar nodeNear = entry.nearT;
+        const uint32_t idx = entry.nodeIdx;
+        const S nodeNear = entry.nearT;
 
-        if (node.isLeaf() || entry.depth >= maxDepth)
+        if (nodes.isLeaf(idx) || entry.depth >= maxDepth)
         {
             if (!hit || nodeNear < closestT)
             {
@@ -554,34 +559,33 @@ inline bool traverseBVHClosestNodeHit(const std::vector<BVHNodeT<Scalar>> &nodes
             continue;
         }
 
-        const BVHNodeT<Scalar> &left = nodes[node.left_idx];
-        const BVHNodeT<Scalar> &right = nodes[node.right_idx()];
+        const uint32_t left = nodes.childOffsets[idx], right = left + 1;
 
-        Scalar leftNear, leftFar;
-        Scalar rightNear, rightFar;
-        bool hitLeft = detail::intersectPreparedRayAABB(prepared, left.bounds, ray.tmin, closestT, leftNear, leftFar);
-        bool hitRight = detail::intersectPreparedRayAABB(prepared, right.bounds, ray.tmin, closestT, rightNear, rightFar);
+        S leftNear, rightNear;
+        const unsigned hitMask = detail::intersectPreparedRayAABBPair(
+            prepared, nodes.bounds + left, ray.tmin, closestT, leftNear, rightNear);
+        const bool hitLeft = hitMask & 1, hitRight = hitMask & 2;
 
         if (hitLeft && hitRight)
         {
             if (leftNear < rightNear)
             {
-                stack.push({node.right_idx(), entry.depth + 1, rightNear});
-                stack.push({node.left_idx, entry.depth + 1, leftNear});
+                stack.push({right, entry.depth + 1, rightNear});
+                stack.push({left, entry.depth + 1, leftNear});
             }
             else
             {
-                stack.push({node.left_idx, entry.depth + 1, leftNear});
-                stack.push({node.right_idx(), entry.depth + 1, rightNear});
+                stack.push({left, entry.depth + 1, leftNear});
+                stack.push({right, entry.depth + 1, rightNear});
             }
         }
         else if (hitLeft)
         {
-            stack.push({node.left_idx, entry.depth + 1, leftNear});
+            stack.push({left, entry.depth + 1, leftNear});
         }
         else if (hitRight)
         {
-            stack.push({node.right_idx(), entry.depth + 1, rightNear});
+            stack.push({right, entry.depth + 1, rightNear});
         }
     }
 
@@ -592,6 +596,24 @@ inline bool traverseBVHClosestNodeHit(const std::vector<BVHNodeT<Scalar>> &nodes
     }
 
     return hit;
+}
+
+template<typename Scalar, typename Func>
+inline void traverseBVH(const BVHData<Scalar>& nodes, Func&& visit) {
+    traverseBVH(nodes.data(), std::forward<Func>(visit));
+}
+
+template<typename Scalar>
+inline bool traverseBVHClosestHit(const BVHData<Scalar>& nodes,
+                                  const std::vector<PrimitiveT<Scalar>>& primitives,
+                                  const RayT<Scalar>& ray, uint32_t& id, Scalar& t) {
+    return traverseBVHClosestHit(nodes.data(), primitives, ray, id, t);
+}
+
+template<typename Scalar>
+inline bool traverseBVHClosestNodeHit(const BVHData<Scalar>& nodes, const RayT<Scalar>& ray,
+                                      uint32_t maxDepth, uint32_t& id, Scalar& t) {
+    return traverseBVHClosestNodeHit(nodes.data(), ray, maxDepth, id, t);
 }
 
 } // namespace bvh2

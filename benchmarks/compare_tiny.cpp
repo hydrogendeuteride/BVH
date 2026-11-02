@@ -40,8 +40,8 @@ int main(int argc, char** argv) {
     std::mt19937 random(42);
     std::uniform_real_distribution<float> uniform(-0.9f, 0.9f);
     auto randomVector = [&] { return V(uniform(random), uniform(random), uniform(random)); };
-    constexpr const char* names[] = {"sah", "lbvh", "tiny", "tiny_leaf1"};
-    constexpr int backendCount = 4;
+    constexpr const char* names[] = {"sah", "lbvh", "tiny", "tiny_leaf1", "lbvh_radix"};
+    constexpr int backendCount = 5;
     unsigned mismatches = 0;
     std::puts("scene,backend,threads,triangles,rays,bounces,coherent,build_ms,trace_ms,node_bytes,mismatches,checksum");
     for (bool clutter : {false, true}) {
@@ -65,15 +65,16 @@ int main(int argc, char** argv) {
         std::vector<tinybvh::bvhvec4> vertices;
         for (const auto& t : triangles) for (const auto& p : {t.v0, t.v1, t.v2})
             vertices.emplace_back(p.x, p.y, p.z, 0);
-        std::vector<bvh2::BVHNode> nodes[2];
+        bvh2::BVHData<float> nodes[3];
         std::unique_ptr<tinybvh::BVH> tiny[2];
         std::vector<double> buildTimes[backendCount];
         for (int round = 0; round < 4; ++round) for (int backend = 0; backend < backendCount; ++backend) {
-            if (backend >= 2) tiny[backend - 2] = std::make_unique<tinybvh::BVH>();
-            else nodes[backend] = std::vector<bvh2::BVHNode>{};
+            if (backend == 2 || backend == 3) tiny[backend - 2] = std::make_unique<tinybvh::BVH>();
+            else nodes[backend == 4 ? 2 : backend] = bvh2::BVHData<float>{};
             const double ms = timed([&] {
                 if (!backend) nodes[backend] = bvh2::buildSAHBVH(executor, triangles);
                 else if (backend == 1) nodes[backend] = bvh2::buildLBVH<uint64_t>(executor, triangles);
+                else if (backend == 4) nodes[2] = bvh2::buildLBVH<uint64_t>(executor, triangles, bvh2::MortonSortMethod::RadixSort);
                 else {
                     auto& tree = *tiny[backend - 2];
                     tree.settings.enableThreading = workers > 1;
@@ -128,8 +129,8 @@ int main(int argc, char** argv) {
                 for (int round = 0; round < 6; ++round) for (int slot = 0; slot < backendCount; ++slot) {
                     const int backend = (slot + round) % backendCount;
                     auto trace = [&] {
-                        if (backend < 2) run([&](const bvh2::Ray& ray, uint32_t& id, float& t) {
-                            return bvh2::traverseBVHClosestHit(nodes[backend], triangles, ray, id, t);
+                        if (backend < 2 || backend == 4) run([&](const bvh2::Ray& ray, uint32_t& id, float& t) {
+                            return bvh2::traverseBVHClosestHit(nodes[backend == 4 ? 2 : backend], triangles, ray, id, t);
                         }, results[backend]);
                         else run([&](const bvh2::Ray& ray, uint32_t& id, float& t) {
                             tinybvh::Ray r({ray.origin.x, ray.origin.y, ray.origin.z},
@@ -159,8 +160,8 @@ int main(int argc, char** argv) {
                         }
                         checksum += b.path + b.hits;
                     }
-                    const size_t bytes = backend >= 2 ? tiny[backend - 2]->usedNodes * sizeof(tinybvh::BVH::BVHNode)
-                                                     : nodes[backend].size() * sizeof(bvh2::BVHNode);
+                    const size_t bytes = (backend == 2 || backend == 3) ? tiny[backend - 2]->usedNodes * sizeof(tinybvh::BVH::BVHNode)
+                                                     : nodes[backend == 4 ? 2 : backend].size() * (sizeof(bvh2::Box<float>) + 2 * sizeof(uint32_t));
                     std::printf("%s,%s,%u,%zu,%d,%u,%d,%.3f,%.3f,%zu,%u,%.6f\n", clutter ? "clutter" : "cube",
                         names[backend], workers, triangles.size(), rayCount,
                         bounces, coherent, median(buildTimes[backend]), median(times[backend]), bytes, errors, checksum);
